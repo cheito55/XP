@@ -51,3 +51,8 @@ wrangler deploy
 
 ## Análisis de la app original
 Ver [`ANÁLISIS-APP-ORIGINAL.md`](ANÁLISIS-APP-ORIGINAL.md) — RE completa de `xuper_app.apk` (Xuper 6.5.7): protocolo de frames WS binarios (`0x50/0x65/0x30/0x31`), claves AES HTTP, flujo SLB de tokens y mediaCodes conocidos (`xuper-worker/media-codes.json`).
+
+### Extracción de la caché de Xuper
+- `tools/extract-xuper-cache.sh` — dump en el celular (root o run-as).
+- `tools/adb-backup-cache.md` — método `adb backup` sin root (mod Hydra `com.xuper.netxxus` permite backup).
+- `tools/parse-xuper-cache.py` — genera `catalog_xuper.json` (títulos + mediaCodes) desde el dump.
