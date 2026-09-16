@@ -1,5 +1,5 @@
 /*
- * GrayJay - XuperTv Source v81
+ * GrayJay - XuperTv Source v82
  * Worker proxy + contenido capturado como fallback
  * ES5 puro - REPOSITORIO: https://github.com/cheito55/XP
  */
@@ -14,9 +14,7 @@ var _workerUrl = DEFAULT_WORKER;
 
 // === Datos capturados del HAR (fallback) ===
 var CAPTURED_CHANNELS = [
-    { id: "cyx_50fdcc0817d61_720p", name: "Canal en Vivo 1", logo: "" },
-    { id: "cyx_50fdcc0817d61_720p", name: "Canal MX Vivo", logo: "" },
-    { id: "cyx_50fdcc0817d61_720p", name: "Canal LATAM", logo: "" }
+    { id: "cyx_50fdcc0817d61_720p", name: "Canal en Vivo 1", logo: "" }
 ];
 
 var CAPTURED_VOD = [
@@ -54,65 +52,32 @@ function workerPost(path, body) {
     return safePost(_workerUrl + path, body);
 }
 
-// === Pager ===
-function XuperPager(videos, hasMore, token) {
-    this.videos = videos || [];
-    this.hasMore = hasMore || false;
-    this.token = token || {};
+// === Pager (ES5 prototype, no class) ===
+function XuperPager(results, hasMore, context) {
+    VideoPager.call(this, results, hasMore, context);
 }
-
+XuperPager.prototype = Object.create(VideoPager.prototype);
+XuperPager.prototype.constructor = XuperPager;
 XuperPager.prototype.nextPage = function() {
-    return new XuperPager([], false, {});
-};
-
-XuperPager.prototype.firstPage = function() {
-    return this.videos;
+    return new XuperPager([], false, { type: "home" });
 };
 
 // === Build video from captured data ===
-function buildCapturedVideo(item, type) {
-    var isLive = (type === "live");
-    var prefix = isLive ? "LIVE: " : "";
-    var url = "xuper://" + type + "?id=" + encodeURIComponent(item.id);
-
-    var thumbs = [];
-    if (item.logo) thumbs.push(new Thumbnail(item.logo, 480));
-
-    return new PlatformVideo({
-        id: new PlatformID(PLATFORM, item.id, PLUGIN_ID),
-        name: prefix + (item.title || item.name || item.id),
-        thumbnails: new Thumbnails(thumbs),
-        author: new PlatformAuthorLink(
-            new PlatformID(PLATFORM, "XuperTv", PLUGIN_ID),
-            "XuperTv",
-            ""
-        ),
-        uploadDate: 0,
-        duration: 0,
-        viewCount: 0,
-        url: url,
-        isLive: isLive
-    });
-}
-
-// === Build video from worker response ===
-function buildWorkerVideo(item) {
-    var id = item.contentId || item.content_id || item.id || item.mediaCode || item.media_code || item.channelCode || "";
-    var title = item.title || item.name || item.contentName || item.channelName || item.vodName || id;
-    var thumb = item.logoUrl || item.picUrl || item.pic_url || item.posterUrl || item.cover || item.image || "";
-    var isLive = item.isLive || item.is_live || item.type === "live";
-    var type = isLive ? "live" : "vod";
-    var url = "xuper://" + type + "?id=" + encodeURIComponent(id);
+function buildVideo(item, isLive) {
+    var id = item.id || item.mediaCode || item.channelCode || "";
+    var title = item.title || item.name || item.vodName || id;
+    var thumb = item.logo || item.pic || "";
+    var url = "xuper://" + (isLive ? "live" : "vod") + "?id=" + encodeURIComponent(id);
 
     var thumbs = [];
     if (thumb) thumbs.push(new Thumbnail(thumb, 480));
 
     return new PlatformVideo({
-        id: new PlatformID(PLATFORM, id, PLUGIN_ID),
+        id: new PlatformID(PLATFORM, id, _conf.id),
         name: (isLive ? "LIVE: " : "") + title,
         thumbnails: new Thumbnails(thumbs),
         author: new PlatformAuthorLink(
-            new PlatformID(PLATFORM, "XuperTv", PLUGIN_ID),
+            new PlatformID(PLATFORM, "XuperTv", _conf.id),
             "XuperTv",
             ""
         ),
@@ -124,17 +89,34 @@ function buildWorkerVideo(item) {
     });
 }
 
-// === Source API ===
-source.isContentDetailsUrl = function(url) {
-    return /^xuper:\/\//i.test(String(url || ""));
+// === Source API Implementation ===
+source.enable = function(conf, settings) {
+    _conf = conf || {};
+    _settings = settings || {};
+    if (_settings && _settings.worker_url) {
+        _workerUrl = String(_settings.worker_url).replace(/\/+$/, "");
+    }
+    // Auto-login
+    try {
+        workerPost("/api/login", {
+            email: "syeromero.tv@gmail.com",
+            password: "Sarilu2412"
+        });
+    } catch (e) {}
 };
 
-source.isVideoDetailsUrl = function(url) {
-    return /^xuper:\/\//i.test(String(url || ""));
+source.setSettings = function(settings) {
+    _settings = settings || {};
+    if (_settings && _settings.worker_url) {
+        _workerUrl = String(_settings.worker_url).replace(/\/+$/, "");
+    }
 };
 
-source.isChannelUrl = function() {
-    return false;
+source.getSettings = function() {
+    return [
+        { key: "worker_url", label: "Worker URL", type: "text", defaultValue: DEFAULT_WORKER },
+        { key: "debug", label: "Debug", type: "boolean", defaultValue: false }
+    ];
 };
 
 source.getSearchCapabilities = function() {
@@ -145,91 +127,113 @@ source.getSearchCapabilities = function() {
     };
 };
 
+source.isChannelUrl = function() {
+    return false;
+};
+
+source.isContentDetailsUrl = function(url) {
+    return /^xuper:\/\//i.test(String(url || ""));
+};
+
+source.isVideoDetailsUrl = function(url) {
+    return /^xuper:\/\//i.test(String(url || ""));
+};
+
 source.search = function(query, type, order, filters, continuationToken) {
-    return new XuperPager([], false, { query: query });
+    return new XuperPager([], false, { type: "search", query: query });
 };
 
 source.searchSuggestions = function(query) {
-    return ok(query) ? [query] : [];
+    return query ? [query] : [];
 };
 
 source.getHome = function(continuationToken) {
-    // Try worker first
-    var r = workerGet("/api/home");
-    if (r && r.ok && r.data && Array.isArray(r.data) && r.data.length > 0) {
-        var videos = [];
-        for (var i = 0; i < r.data.length; i++) {
-            videos.push(buildWorkerVideo(r.data[i]));
+    var videos = [];
+
+    // Intentar Worker primero
+    try {
+        var r = workerGet("/api/home");
+        if (r && r.ok && r.data && r.data.length > 0) {
+            for (var i = 0; i < r.data.length; i++) {
+                var item = r.data[i];
+                var id = item.contentId || item.mediaCode || item.id || "";
+                if (!id) continue;
+                var isLive = item.isLive || item.type === "live";
+                var title = item.title || item.name || id;
+                var thumb = item.logoUrl || item.picUrl || "";
+                var url = "xuper://" + (isLive ? "live" : "vod") + "?id=" + encodeURIComponent(id);
+
+                var thumbs = [];
+                if (thumb) thumbs.push(new Thumbnail(thumb, 480));
+
+                videos.push(new PlatformVideo({
+                    id: new PlatformID(PLATFORM, id, _conf.id),
+                    name: (isLive ? "LIVE: " : "") + title,
+                    thumbnails: new Thumbnails(thumbs),
+                    author: new PlatformAuthorLink(
+                        new PlatformID(PLATFORM, "XuperTv", _conf.id),
+                        "XuperTv",
+                        ""
+                    ),
+                    uploadDate: 0,
+                    duration: 0,
+                    viewCount: 0,
+                    url: url,
+                    isLive: isLive
+                }));
+            }
         }
-        return new XuperPager(videos, false, { type: "home" });
+    } catch (e) {}
+
+    // Fallback a datos capturados
+    if (videos.length === 0) {
+        var i;
+        for (i = 0; i < CAPTURED_CHANNELS.length; i++) {
+            videos.push(buildVideo(CAPTURED_CHANNELS[i], true));
+        }
+        for (i = 0; i < CAPTURED_VOD.length; i++) {
+            videos.push(buildVideo(CAPTURED_VOD[i], false));
+        }
     }
 
-    // Fallback to captured data
-    var videos = [];
-    var i;
-    for (i = 0; i < CAPTURED_CHANNELS.length; i++) {
-        videos.push(buildCapturedVideo(CAPTURED_CHANNELS[i], "live"));
-    }
-    for (i = 0; i < CAPTURED_VOD.length; i++) {
-        videos.push(buildCapturedVideo(CAPTURED_VOD[i], "vod"));
-    }
     return new XuperPager(videos, false, { type: "home" });
 };
 
 source.getContentDetails = function(url) {
     var id = "";
-    var typ = "vod";
-    var m = String(url || "").match(/xuper:\/\/(\w+)\?id=([^&]+)/);
+    var isLive = false;
+
+    var m = String(url || "").match(/xuper:\/\/(live|vod)\?id=([^&]+)/);
     if (m) {
-        typ = m[1];
+        isLive = (m[1] === "live");
         id = decodeURIComponent(m[2]);
     }
     if (!id) {
         var m2 = String(url || "").match(/id=([^&]+)/);
         if (m2) id = decodeURIComponent(m2[1]);
     }
-    if (!id) id = String(url || "").replace(/^xuper:\/\//i, "").replace(/^(live|vod)\?id=/i, "");
     if (!id) id = String(url || "");
-
-    var thumbs = [];
-    var video = new PlatformVideo({
-        id: new PlatformID(PLATFORM, id, PLUGIN_ID),
-        name: id,
-        thumbnails: new Thumbnails(thumbs),
-        author: new PlatformAuthorLink(
-            new PlatformID(PLATFORM, "XuperTv", PLUGIN_ID),
-            "XuperTv",
-            ""
-        ),
-        uploadDate: 0,
-        duration: 0,
-        viewCount: 0,
-        url: url,
-        isLive: (typ === "live")
-    });
 
     var videoSources = [];
 
-    if (typ === "live") {
+    if (isLive) {
+        // Live stream
         var lr = workerPost("/api/live", { channelCode: id });
+        var liveUrl = "";
         if (lr && lr.ok && lr.data && lr.data.streamUrl) {
-            videoSources.push(new VideoUrlSource({
-                url: lr.data.streamUrl,
-                width: 1920,
-                height: 1080,
-                container: "application/x-mpegURL",
-                codec: "H.264"
-            }));
+            liveUrl = lr.data.streamUrl;
         } else {
-            videoSources.push(new VideoUrlSource({
-                url: "http://23.227.144.242:44822/live/" + id + ".m3u8",
-                width: 1920,
-                height: 1080,
-                container: "application/x-mpegURL",
-                codec: "H.264"
-            }));
+            liveUrl = "http://23.227.144.242:44822/live/" + id + ".m3u8";
         }
+        videoSources.push(new VideoUrlSource({
+            url: liveUrl,
+            width: 1920,
+            height: 1080,
+            container: "application/x-mpegURL",
+            codec: "H.264"
+        }));
     } else {
+        // VOD stream
         var sr = workerPost("/api/stream", { mediaCode: id });
         if (sr && sr.ok && sr.data) {
             var sUrl = sr.data.streamUrl || sr.data.url || "";
@@ -246,11 +250,11 @@ source.getContentDetails = function(url) {
     }
 
     return new PlatformVideoDetails({
-        id: new PlatformID(PLATFORM, id, PLUGIN_ID),
+        id: new PlatformID(PLATFORM, id, _conf.id),
         name: id,
-        thumbnails: new Thumbnails(thumbs),
+        thumbnails: new Thumbnails([]),
         author: new PlatformAuthorLink(
-            new PlatformID(PLATFORM, "XuperTv", PLUGIN_ID),
+            new PlatformID(PLATFORM, "XuperTv", _conf.id),
             "XuperTv",
             ""
         ),
@@ -258,7 +262,7 @@ source.getContentDetails = function(url) {
         duration: 0,
         viewCount: 0,
         url: url,
-        isLive: (typ === "live"),
+        isLive: isLive,
         description: id + "\n\nXuperTv - Fuente GrayJay",
         video: new VideoSourceDescriptor(videoSources),
         live: null,
@@ -277,15 +281,13 @@ source.searchChannels = function(query, continuationToken) {
 
 source.getChannel = function(url) {
     return new PlatformChannel({
-        id: new PlatformID(PLATFORM, "XuperTv", PLUGIN_ID),
+        id: new PlatformID(PLATFORM, "XuperTv", _conf.id),
         name: "XuperTv",
         thumbnails: new Thumbnails([]),
         url: "",
         subscriberCount: 0
     });
 };
-
-source.getSubComments = function() { return []; };
 
 source.getDiagnostics = function() {
     var wOk = false;
@@ -297,34 +299,7 @@ source.getDiagnostics = function() {
     } catch (e) {}
     return {
         platform: PLATFORM,
-        version: 81,
+        version: 82,
         worker: { url: _workerUrl, online: wOk, data: wData }
     };
-};
-
-source.enable = function(conf, settings, savedState) {
-    _conf = conf || {};
-    _settings = settings || {};
-    if (_settings && _settings.worker_url) {
-        _workerUrl = _settings.worker_url;
-    }
-    // Auto-login on enable
-    try {
-        workerPost("/api/login", {
-            email: "syeromero.tv@gmail.com",
-            password: "Sarilu2412"
-        });
-    } catch (e) {}
-};
-
-source.setSettings = function(s) {
-    _settings = s || {};
-    if (_settings.worker_url) _workerUrl = _settings.worker_url;
-};
-
-source.getSettings = function() {
-    return [
-        { key: "worker_url", label: "Worker URL", type: "text", defaultValue: DEFAULT_WORKER },
-        { key: "debug", label: "Debug", type: "boolean", defaultValue: false }
-    ];
 };
