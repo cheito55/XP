@@ -3,4 +3,5 @@ main = "worker.js"
 compatibility_date = "2024-09-01"
 
 [vars]
-WORKER_VERSION = "9.0"
+WORKER_VERSION = "9.1"
+TMDB_KEY = "1c7e5ac8a89d07489b3b14d7b3b1b0a2"
