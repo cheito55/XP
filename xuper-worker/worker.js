@@ -1,3 +1,4 @@
+import { connect } from "cloudflare:sockets";
 /**
  * XuperTv Bridge - Cloudflare Worker v7.0
  * Criptografía descifrada por ingeniería inversa
@@ -279,8 +280,92 @@ export default {
       if (p === "/api/notice") return await handleNotice();
       if (p === "/api/ads" && request.method === "POST") return await handleAds(request);
       if (p === "/api/tokens" && request.method === "POST") return await handleTokenUpdate(request);
-      if (p === "/api/crypto-test" && request.method === "POST") return handleCryptoTest(request);
+      if (p === "/api/crypto-test" if (p === "/api/crypto-test" && request.method === "POST") return handleCryptoTest(request);if (p === "/api/crypto-test" && request.method === "POST") return handleCryptoTest(request); request.method === "POST") return handleCryptoTest(request);
+      if (p === "/api/ws-test") return json({ ok: true, results: await wsTest() });
       return err("Not found: " + p, 404);
     } catch (e) { return err("Error: " + e.message, 500); }
   }
 };
+
+// === WS Protocol Test ===
+
+function parseWsFrame(data) {
+  if (data.length < 2) return null;
+  const b0 = data[0];
+  const opcode = b0 & 0x0F;
+  let payloadLen = data[1] & 0x7F;
+  let offset = 2;
+  if (payloadLen === 126) { payloadLen = (data[2] << 8) | data[3]; offset = 4; }
+  const payload = data.slice(offset, offset + payloadLen);
+  return { opcode, payload, text: new TextDecoder().decode(payload) };
+}
+
+async function wsTest() {
+  const results = {};
+  const hash = genHash(16);
+  
+  // Try portal WS with connect()
+  try {
+    const socket = connect({ hostname: "s23sdf56.45lc9mx79ab.com", port: 80 });
+    const writer = socket.writable.getWriter();
+    const reader = socket.readable.getReader();
+    
+    const wsKey = btoa(crypto.randomUUID().replace(/-/g,'').substr(0,16) + crypto.randomUUID().replace(/-/g,'').substr(0,16));
+    const upgrade = `GET /v1/ws/${hash} HTTP/1.1\r\nHost: s23sdf56.45lc9mx79ab.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${wsKey}\r\nSec-WebSocket-Version: 13\r\nOrigin: http://hydra\r\nUser-Agent: Ranger/4.9.4-17294ac0\r\n\r\n`;
+    await writer.write(new TextEncoder().encode(upgrade));
+    
+    const { value } = await Promise.race([reader.read(), new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),5000))]);
+    const resp = new TextDecoder().decode(value);
+    const isUpgrade = resp.includes("101");
+    results.portal = { status: resp.split('\r\n')[0], upgrade: isUpgrade };
+    
+    if (isUpgrade) {
+      // Send test payloads
+      const payloads = [
+        '{"type":"ping"}',
+        '{"cmd":"ping"}',
+        JSON.stringify({type:"login",userId:"556784760",dev_id:"761cd6edc9681aa5d27dd1e1fa38ae08"}),
+      ];
+      
+      for (const p of payloads) {
+        try {
+          const raw = new TextEncoder().encode(p);
+          const mask = crypto.getRandomValues(new Uint8Array(4));
+          const hdr = new Uint8Array([0x82, 0x80 | raw.length]);
+          const frame = new Uint8Array(2 + 4 + raw.length);
+          frame.set(hdr); frame.set(mask, 2);
+          for (let i = 0; i < raw.length; i++) frame[6+i] = raw[i] ^ mask[i&3];
+          await writer.write(frame);
+          
+          const { value: wsResp } = await Promise.race([reader.read(), new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),2000))]);
+          const parsed = parseWsFrame(wsResp);
+          results["portal_" + p.substring(0,20)] = { received: wsResp.length + "B", text: parsed ? parsed.text.substring(0,200) : wsResp.slice(0,40).toString() };
+        } catch (e) {
+          results["portal_" + p.substring(0,20)] = { error: e.message };
+        }
+      }
+      await writer.close();
+    }
+  } catch (e) {
+    results.portal = { error: e.message };
+  }
+  
+  // Try search WS
+  try {
+    const socket = connect({ hostname: "sgyc.bfj1k2g4v.com", port: 80 });
+    const writer = socket.writable.getWriter();
+    const reader = socket.readable.getReader();
+    
+    const wsKey = btoa(crypto.randomUUID().replace(/-/g,'').substr(0,16) + crypto.randomUUID().replace(/-/g,'').substr(0,16));
+    await writer.write(new TextEncoder().encode(`GET /v1/imagine HTTP/1.1\r\nHost: sgyc.bfj1k2g4v.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${wsKey}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
+    
+    const { value } = await Promise.race([reader.read(), new Promise((_,r)=>setTimeout(()=>r(new Error("timeout")),5000))]);
+    const resp = new TextDecoder().decode(value);
+    results.search = { status: resp.split('\r\n')[0], upgrade: resp.includes("101") };
+    await writer.close();
+  } catch (e) {
+    results.search = { error: e.message };
+  }
+  
+  return results;
+}
