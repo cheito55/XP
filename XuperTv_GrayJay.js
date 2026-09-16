@@ -1,11 +1,11 @@
 /*
- * GrayJay - XuperTv Source v56
+ * GrayJay - XuperTv Source v57
  *
- * v56: Reescrito para el nuevo repo XP con Cloudflare Worker v3.
- *   - WebSocket bridge via Worker para comunicarse con el portal
- *   - Sin dependencia de DCS (los seeds estan muertos)
- *   - Auth manual (userId/userToken/portalCode) o via Worker /auth
- *   - ES5 puro: sin const/let, sin arrow functions, sin class, sin spread, sin for...of
+ * v57: Adaptado para Worker v5 con WebSocket real (cloudflare:sockets).
+ *   - Worker abre WebSocket al portal, sirve de puente HTTP ↔ WS
+ *   - Sesiones via /auth que devuelve sessionId
+ *   - Todos los endpoints usan X-Session-Id header
+ *   - ES5 puro: sin const/let, sin arrow functions, sin class, sin spread
  *
  * REPOSITORIO: https://github.com/cheito55/XP
  */
@@ -14,14 +14,18 @@ var PLATFORM_NAME = "XuperTv";
 var PLUGIN_ID = "8d1f6f41-7d4a-4e8c-a42f-5c9b7a31e602";
 var DEFAULT_WORKER_URL = "https://xuper-bridge.cheito55.workers.dev";
 
-var SEARCH_PAGE_SIZE = 30;
 var MAX_SOURCES = 20;
-var REQUEST_TIMEOUT = 30000;
+var SEARCH_PAGE_SIZE = 30;
 
 var _config = {};
 var _settings = {};
-var _authCache = null;
+var _sessionId = "";
+var _userId = "";
+var _userToken = "";
+var _portalCode = "";
+var _deviceId = "";
 var _authAttempted = false;
+var _authError = "";
 
 // ============================================================
 //  Utilidades
@@ -29,7 +33,6 @@ var _authAttempted = false;
 
 function txt(v) { return v == null ? "" : String(v); }
 function nonEmpty(v) { return v != null && String(v).trim() !== ""; }
-
 function firstValid() {
   var i;
   for (i = 0; i < arguments.length; i++) {
@@ -37,20 +40,17 @@ function firstValid() {
   }
   return "";
 }
-
 function safeJson(value) {
   if (value == null) return null;
   if (typeof value === "object") return value;
-  try { return JSON.parse(String(value)); } catch (e1) {}
+  try { return JSON.parse(String(value)); } catch (e) {}
   return null;
 }
-
 function getSetting(name, fallback) {
-  try { if (_settings && nonEmpty(_settings[name])) return _settings[name]; } catch (e1) {}
-  try { if (_config && _config.settings && nonEmpty(_config.settings[name])) return _config.settings[name]; } catch (e2) {}
+  try { if (_settings && nonEmpty(_settings[name])) return _settings[name]; } catch (e) {}
+  try { if (_config && _config.settings && nonEmpty(_config.settings[name])) return _config.settings[name]; } catch (e) {}
   return fallback || "";
 }
-
 function dbg(msg) {
   try { if (_settings && _settings.debug) console.log("[XuperTv] " + String(msg)); } catch (e) {}
 }
@@ -58,20 +58,18 @@ function dbg(msg) {
 function workerUrl() {
   return firstValid(getSetting("worker_url", ""), getSetting("workerUrl", ""), DEFAULT_WORKER_URL).replace(/\/+$/, "");
 }
-
-function settingUserId() { return firstValid(getSetting("user_id", ""), getSetting("userId", "")); }
-function settingUserToken() { return firstValid(getSetting("user_token", ""), getSetting("userToken", "")); }
-function settingPortalCode() { return firstValid(getSetting("portal_code", ""), getSetting("portalCode", "")); }
-function settingEmail() { return firstValid(getSetting("email", ""), getSetting("user_email", "")); }
-function settingPassword() { return firstValid(getSetting("password", ""), getSetting("user_password", "")); }
-function settingPortalBase() { return firstValid(getSetting("portal_base", ""), getSetting("portalBase", "")); }
+function sUserId() { return firstValid(getSetting("user_id", ""), getSetting("userId", "")); }
+function sUserToken() { return firstValid(getSetting("user_token", ""), getSetting("userToken", "")); }
+function sPortalCode() { return firstValid(getSetting("portal_code", ""), getSetting("portalCode", "")); }
+function sEmail() { return firstValid(getSetting("email", ""), getSetting("user_email", "")); }
+function sPassword() { return firstValid(getSetting("password", ""), getSetting("user_password", "")); }
+function sPortalBase() { return firstValid(getSetting("portal_base", ""), getSetting("portalBase", "")); }
 
 // ============================================================
 //  HTTP helpers
 // ============================================================
 
 function httpGet(url, headers) {
-  dbg("GET " + url);
   if (typeof http !== "undefined" && http.get) return http.get(url, headers || {});
   if (typeof http !== "undefined" && http.GET) return http.GET(url, headers || {});
   if (typeof Http !== "undefined" && Http.get) return Http.get(url, headers || {});
@@ -80,7 +78,6 @@ function httpGet(url, headers) {
 }
 
 function httpPost(url, body, headers) {
-  dbg("POST " + url);
   var h = { "Content-Type": "application/json" };
   if (headers) { var hk; for (hk in headers) { if (headers.hasOwnProperty(hk)) h[hk] = headers[hk]; } }
   var payload = typeof body === "string" ? body : JSON.stringify(body);
@@ -91,208 +88,95 @@ function httpPost(url, body, headers) {
   throw new Error("No hay implementacion HTTP POST disponible");
 }
 
-function httpPostText(url, body, headers) {
-  var resp = httpPost(url, body, headers);
-  if (resp && typeof resp.body === "string") return resp.body;
-  return resp ? txt(resp.body || resp.text || JSON.stringify(resp)) : "";
-}
-
-function httpGetText(url, headers) {
-  var resp = httpGet(url, headers);
-  if (resp && typeof resp.body === "string") return resp.body;
-  return resp ? txt(resp.body || resp.text || JSON.stringify(resp)) : "";
-}
-
 function httpPostJson(url, body, headers) {
-  var text = httpPostText(url, body, headers);
-  return safeJson(text);
+  var resp = httpPost(url, body, headers);
+  var b = resp && resp.body ? resp.body : resp;
+  if (typeof b === "string") return safeJson(b);
+  return b || null;
 }
 
 function httpGetJson(url, headers) {
-  var text = httpGetText(url, headers);
-  return safeJson(text);
+  var resp = httpGet(url, headers);
+  var b = resp && resp.body ? resp.body : resp;
+  if (typeof b === "string") return safeJson(b);
+  return b || null;
 }
 
 // ============================================================
-//  Worker API calls
+//  Worker API
 // ============================================================
+
+function workerCall(path, data, extraHeaders) {
+  var url = workerUrl() + path;
+  var headers = {};
+  if (_sessionId) headers["X-Session-Id"] = _sessionId;
+  if (extraHeaders) { var hk; for (hk in extraHeaders) { if (extraHeaders.hasOwnProperty(hk)) headers[hk] = extraHeaders[hk]; } }
+  dbg("Worker POST " + path);
+  var resp = httpPost(url, data || {}, headers);
+  var b = resp && resp.body ? resp.body : resp;
+  return safeJson(b) || { ok: false, error: "sin respuesta" };
+}
 
 function workerGet(path) {
   var url = workerUrl() + path;
-  dbg("Worker GET: " + url);
+  dbg("Worker GET " + path);
   var resp = httpGet(url, {});
-  var body = resp && resp.body ? resp.body : resp;
-  return safeJson(body) || { status: "error", body: txt(body) };
-}
-
-function workerPost(path, data) {
-  var url = workerUrl() + path;
-  dbg("Worker POST: " + url);
-  var resp = httpPost(url, data || {}, { "Content-Type": "application/json" });
-  var body = resp && resp.body ? resp.body : resp;
-  return safeJson(body) || { status: "error", body: txt(body) };
-}
-
-// ============================================================
-//  Worker endpoints (nuevos con v3)
-// ============================================================
-
-function workerHealth() {
-  return workerGet("/health");
-}
-
-function workerAuth() {
-  var emailAddr = settingEmail();
-  var pass = settingPassword();
-  var uid = settingUserId();
-  var utoken = settingUserToken();
-  var pcode = settingPortalCode();
-  var pbase = settingPortalBase();
-
-  var payload = {};
-
-  if (emailAddr && pass) {
-    payload.email = emailAddr;
-    payload.password = pass;
-    if (pbase) payload.portalBase = pbase;
-  } else if (uid && utoken) {
-    payload.userId = uid;
-    payload.userToken = utoken;
-    if (pcode) payload.portalCode = pcode;
-    if (pbase) payload.portalBase = pbase;
-  } else {
-    return { ok: false, error: "Configura email+password o userId+userToken en ajustes del plugin" };
-  }
-
-  return workerPost("/auth", payload);
-}
-
-function workerHome() {
-  var auth = ensureAuth();
-  if (!auth || !auth.ok) return { data: [] };
-
-  var headers = buildAuthHeaders(auth);
-  var url = workerUrl() + "/api/getHome";
-  var resp = httpPost(url, {}, headers);
-  var body = resp && resp.body ? resp.body : resp;
-  var parsed = safeJson(body);
-  return parsed || { data: [] };
-}
-
-function workerSearch(query, page) {
-  var auth = ensureAuth();
-  var headers = auth && auth.ok ? buildAuthHeaders(auth) : { "Content-Type": "application/json" };
-
-  var payload = { query: query, page: page || 1 };
-
-  var url = workerUrl() + "/api/search";
-  var resp = httpPost(url, payload, headers);
-  var body = resp && resp.body ? resp.body : resp;
-  return safeJson(body) || { data: [] };
-}
-
-function workerGetItemData(contentId) {
-  var auth = ensureAuth();
-  var headers = auth && auth.ok ? buildAuthHeaders(auth) : { "Content-Type": "application/json" };
-
-  var payload = { contentId: contentId };
-  var url = workerUrl() + "/api/getItemData";
-  var resp = httpPost(url, payload, headers);
-  var body = resp && resp.body ? resp.body : resp;
-  return safeJson(body) || { data: null };
-}
-
-function workerGetSlbInfo(mediaCode, extra) {
-  var auth = ensureAuth();
-  var headers = auth && auth.ok ? buildAuthHeaders(auth) : { "Content-Type": "application/json" };
-
-  var payload = { mediaCode: mediaCode };
-  if (extra) { var k; for (k in extra) { if (extra.hasOwnProperty(k)) payload[k] = extra[k]; } }
-
-  var url = workerUrl() + "/api/getSlbInfo";
-  var resp = httpPost(url, payload, headers);
-  var body = resp && resp.body ? resp.body : resp;
-  return safeJson(body) || { data: null };
-}
-
-function workerWsHandshake(portalBase, deviceId, version) {
-  var payload = {
-    portalBase: portalBase,
-    deviceId: deviceId || "GJDUMGQFGHJ=",
-    version: version || "4.34.7"
-  };
-  return workerPost("/ws/handshake", payload);
-}
-
-function workerWsProxy(portalBase, message, timeout) {
-  var payload = {
-    portalBase: portalBase,
-    message: message,
-    timeout: timeout || 15000
-  };
-  return workerPost("/ws/proxy", payload);
-}
-
-function workerStreamHeaders(body) {
-  return workerPost("/api/streamHeaders", body || {});
-}
-
-function workerEpg(channelId) {
-  var url = workerUrl() + "/api/epg?ch=" + encodeURIComponent(channelId || "");
-  return workerGet("/api/epg?ch=" + encodeURIComponent(channelId || ""));
-}
-
-function workerNotice() {
-  return workerGet("/api/notice");
+  var b = resp && resp.body ? resp.body : resp;
+  return safeJson(b) || { ok: false, error: "sin respuesta" };
 }
 
 // ============================================================
 //  Auth management
 // ============================================================
 
-function buildAuthHeaders(auth) {
-  return {
-    "Content-Type": "application/json",
-    "X-Portal-Base": auth.portalBase || "",
-    "X-User-Id": auth.userId || "",
-    "X-User-Token": auth.userToken || "",
-    "X-Portal-Code": auth.portalCode || ""
-  };
-}
-
 function ensureAuth() {
-  if (_authCache && _authCache.ok && _authCache.userId && _authCache.userToken) {
-    return _authCache;
-  }
-
-  if (_authAttempted) return _authCache;
+  if (_sessionId && _userId) return true;
+  if (_authAttempted) return false;
   _authAttempted = true;
 
-  dbg("Iniciando autenticacion via Worker...");
+  var userId = sUserId();
+  var userToken = sUserToken();
+  var portalCode = sPortalCode();
+  var deviceId = firstValid(getSetting("device_id", ""), getSetting("deviceId", ""));
 
-  try {
-    var result = workerAuth();
-    if (result && result.ok && result.userId && result.userToken) {
-      _authCache = result;
-      dbg("Auth OK: userId=" + result.userId);
-      return _authCache;
-    }
-    _authCache = { ok: false, error: (result && result.error) || "Auth fallida" };
-    dbg("Auth fallida: " + _authCache.error);
-  } catch (e) {
-    _authCache = { ok: false, error: txt(e) };
-    dbg("Auth exception: " + txt(e));
+  if (!userId || !userToken) {
+    _authError = "Configura user_id y user_token en ajustes del plugin";
+    dbg(_authError);
+    return false;
   }
 
-  return _authCache;
-}
+  dbg("Autenticando via Worker...");
 
-function activeAuthed() {
-  return _authCache && _authCache.ok && nonEmpty(_authCache.userId);
+  try {
+    var result = workerCall("/auth", {
+      userId: userId,
+      userToken: userToken,
+      portalCode: portalCode,
+      deviceId: deviceId
+    });
+
+    if (result && result.ok && result.sessionId) {
+      _sessionId = result.sessionId;
+      _userId = result.userId || userId;
+      _userToken = result.userToken || userToken;
+      _portalCode = result.portalCode || portalCode;
+      _deviceId = result.deviceId || deviceId;
+      dbg("Auth OK: sessionId=" + _sessionId.substring(0, 12) + "...");
+      return true;
+    }
+
+    _authError = (result && result.error) || "Auth fallida";
+    dbg("Auth fallo: " + _authError);
+  } catch (e) {
+    _authError = txt(e);
+    dbg("Auth exception: " + _authError);
+  }
+
+  return false;
 }
 
 // ============================================================
-//  Parseo de resultados
+//  Data parsing
 // ============================================================
 
 function extractVideoArray(data) {
@@ -302,16 +186,15 @@ function extractVideoArray(data) {
   if (data.inner && Array.isArray(data.inner)) return data.inner;
   if (data.list && Array.isArray(data.list)) return data.list;
   if (data.items && Array.isArray(data.items)) return data.items;
-  if (data.channels && Array.isArray(data.channels)) return data.channels;
   if (data.contents && Array.isArray(data.contents)) return data.contents;
+  if (data.channels && Array.isArray(data.channels)) return data.channels;
   if (data.shelveData && Array.isArray(data.shelveData)) {
-    var all = [];
-    var i;
+    var all = [], i;
     for (i = 0; i < data.shelveData.length; i++) {
-      var shelf = data.shelveData[i];
-      if (shelf.contents && Array.isArray(shelf.contents)) {
+      var sh = data.shelveData[i];
+      if (sh.contents && Array.isArray(sh.contents)) {
         var j;
-        for (j = 0; j < shelf.contents.length; j++) all.push(shelf.contents[j]);
+        for (j = 0; j < sh.contents.length; j++) all.push(sh.contents[j]);
       }
     }
     if (all.length) return all;
@@ -319,198 +202,130 @@ function extractVideoArray(data) {
   return [];
 }
 
-function extractContentId(item) {
-  return txt(
-    item.contentId || item.content_id || item.id || item.mediaCode || item.media_code ||
-    item.channelId || item.channel_id || item.vodId || item.vod_id || ""
-  );
+function extractId(item) {
+  return txt(item.contentId || item.content_id || item.id || item.mediaCode || item.channelId || item.vodId || "");
 }
-
 function extractTitle(item) {
-  return txt(
-    item.title || item.name || item.contentName || item.content_name ||
-    item.channelName || item.channel_name || item.vodName || item.vod_name ||
-    item.tvName || item.tv_name || ""
-  );
+  return txt(item.title || item.name || item.contentName || item.channelName || item.vodName || "");
 }
-
-function extractThumbnail(item) {
-  var url = txt(
-    item.logoUrl || item.logo_url || item.picUrl || item.pic_url || item.posterUrl || item.poster_url ||
-    item.thumbUrl || item.thumb_url || item.image || item.icon || item.cover || item.coverUrl ||
-    item.channelLogo || item.channel_logo || item.vodPicUrl || item.vod_pic || ""
-  );
-  if (!url) {
-    var pics = item.pics || item.images || item.thumbs || item.thumbnails;
-    if (pics && Array.isArray(pics) && pics.length) url = txt(pics[0]);
-  }
-  return url;
+function extractThumb(item) {
+  return txt(item.logoUrl || item.picUrl || item.pic_url || item.posterUrl || item.cover || item.image || item.icon || "");
 }
-
 function extractDuration(item) {
-  var d = item.duration || item.timeLength || item.time_length || item.totalTime || 0;
-  return parseInt(d, 10) || 0;
+  return parseInt(item.duration || item.timeLength || 0, 10) || 0;
 }
-
-function extractViewCount(item) {
-  return parseInt(item.viewCount || item.view_count || item.playCount || item.play_count || 0, 10);
+function extractViews(item) {
+  return parseInt(item.viewCount || item.playCount || 0, 10) || 0;
 }
-
-function extractYear(item) {
-  return parseInt(item.year || item.publishYear || item.releaseYear || 0, 10);
+function extractDesc(item) {
+  return txt(item.description || item.desc || item.detail || item.intro || item.summary || "");
 }
-
-function extractDescription(item) {
-  return txt(
-    item.description || item.desc || item.detail || item.intro || item.content || item.summary || ""
-  );
-}
-
 function extractAuthor(item) {
-  return txt(
-    item.author || item.director || item.actor || item.artist || item.singer ||
-    item.company || item.studio || item.source_name || item.sourceName || ""
-  );
+  return txt(item.author || item.director || item.studio || item.company || item.source_name || "");
 }
-
 function extractIsLive(item) {
-  if (item.isLive === true || item.is_live === true || item.live === true) return true;
-  if (item.type === "live" || item.contentType === "live" || item.channelType === "live") return true;
-  if (item.status === 1 && item.isVod !== true && item.is_vod !== true) return true;
+  if (item.isLive || item.is_live || item.live) return true;
+  if (item.type === "live" || item.contentType === "live") return true;
   return false;
 }
 
-function extractEpisode(item) {
-  var parts = [];
-  if (item.episodeName || item.episode_name) parts.push(txt(item.episodeName || item.episode_name));
-  if (item.episodeNum || item.episode_num) parts.push("E" + txt(item.episodeNum || item.episode_num));
-  if (item.seasonNum || item.season_num) parts.push("S" + txt(item.seasonNum || item.season_num));
-  if (item.groupName || item.group_name) parts.push(txt(item.groupName || item.group_name));
-  return parts.join(" ");
-}
-
 function buildXuperUrl(contentId, item) {
-  var id = txt(contentId);
-  if (!id) return "";
-  var extra = "";
-  if (item) {
-    if (item.seriesId || item.series_id) extra = "&seriesId=" + txt(item.seriesId || item.series_id);
-    if (item.episodeId || item.episode_id) extra += "&episodeId=" + txt(item.episodeId || item.episode_id);
-  }
-  return "xuper://content?id=" + encodeURIComponent(id) + extra;
+  if (!contentId) return "";
+  return "xuper://content?id=" + encodeURIComponent(contentId);
 }
 
 function itemToVideo(item) {
-  var contentId = extractContentId(item);
+  var cid = extractId(item);
   var title = extractTitle(item);
-  var thumbnailUrl = extractThumbnail(item);
-  var duration = extractDuration(item);
-  var viewCount = extractViewCount(item);
-  var isLive = extractIsLive(item);
-  var url = buildXuperUrl(contentId, item);
-
-  var thumbnails = [];
-  if (thumbnailUrl) {
-    thumbnails.push(new Thumbnail(thumbnailUrl, 480));
-  }
-
+  var thumb = extractThumb(item);
+  var thumbs = [];
+  if (thumb) thumbs.push(new Thumbnail(thumb, 480));
   var authorName = extractAuthor(item);
   var authorLink = new PlatformAuthorLink(
     new PlatformID(PLATFORM_NAME, authorName || "XuperTv"),
-    authorName || "XuperTv",
-    ""
+    authorName || "XuperTv", ""
   );
 
   return new PlatformVideo({
-    id: new PlatformID(PLATFORM_NAME, contentId),
+    id: new PlatformID(PLATFORM_NAME, cid),
     name: title || "Sin titulo",
-    thumbnails: new Thumbnails(thumbnails),
+    thumbnails: new Thumbnails(thumbs),
     author: authorLink,
-    datetime: new DateTime(item.date || item.pubDate || item.publishTime || 0),
-    url: url,
-    duration: duration,
-    viewCount: viewCount,
-    isLive: isLive
+    datetime: new DateTime(0),
+    url: buildXuperUrl(cid, item),
+    duration: extractDuration(item),
+    viewCount: extractViews(item),
+    isLive: extractIsLive(item)
   });
 }
 
 function parseVideoList(data) {
   var items = extractVideoArray(data);
-  var videos = [];
-  var i;
+  var videos = [], i;
   for (i = 0; i < items.length && videos.length < MAX_SOURCES; i++) {
-    var item = items[i];
-    if (item && extractContentId(item)) {
-      videos.push(itemToVideo(item));
+    if (items[i] && extractId(items[i])) {
+      videos.push(itemToVideo(items[i]));
     }
   }
   return videos;
 }
 
-function parseVideoListDeep(data) {
+function parseDeep(data) {
   var videos = parseVideoList(data);
-
-  if (!videos.length) {
-    if (data && typeof data === "object") {
-      var key;
-      for (key in data) {
-        if (!data.hasOwnProperty(key)) continue;
-        var val = data[key];
-        if (Array.isArray(val) && val.length) {
-          videos = parseVideoList(val);
-          if (videos.length) break;
-        }
-        if (val && typeof val === "object" && !Array.isArray(val)) {
-          var sub = extractVideoArray(val);
-          if (sub.length) {
-            videos = parseVideoList(sub);
-            if (videos.length) break;
-          }
-        }
+  if (!videos.length && data && typeof data === "object") {
+    var key;
+    for (key in data) {
+      if (!data.hasOwnProperty(key)) continue;
+      var val = data[key];
+      if (Array.isArray(val) && val.length) {
+        videos = parseVideoList(val);
+        if (videos.length) break;
+      }
+      if (val && typeof val === "object" && !Array.isArray(val)) {
+        var sub = extractVideoArray(val);
+        if (sub.length) { videos = parseVideoList(sub); if (videos.length) break; }
       }
     }
   }
-
   return videos;
 }
 
 // ============================================================
-//  Streaming - extraccion de fuentes de video
+//  Video sources extraction
 // ============================================================
 
 function extractSources(item) {
   var sources = [];
+  if (!item) return sources;
 
-  // Direct URL
-  var directUrl = txt(item.playUrl || item.play_url || item.url || item.streamUrl || item.stream_url || item.m3u8 || item.hls);
-  if (directUrl) {
-    var height = parseInt(item.height || item.resolution || item.quality || 0, 10) || 720;
+  var playUrl = txt(item.playUrl || item.play_url || item.url || item.m3u8 || item.hls);
+  if (playUrl) {
+    var h = parseInt(item.height || item.resolution || 720, 10) || 720;
     sources.push(new VideoUrlSource({
-      url: directUrl,
-      width: Math.round(height * 16 / 9),
-      height: height,
-      container: directUrl.indexOf(".m3u8") > -1 ? "application/x-mpegURL" : "video/mp4",
+      url: playUrl,
+      width: Math.round(h * 16 / 9),
+      height: h,
+      container: playUrl.indexOf(".m3u8") > -1 ? "application/x-mpegURL" : "video/mp4",
       codec: "H.264",
       requestModifier: new RequestModifier({ allowByteSkip: true })
     }));
   }
 
-  // CDN node list
-  var cdnList = item.cdnList || item.cdn_list || item.nodes || item.streamNodes || item.stream_nodes;
+  var cdnList = item.cdnList || item.nodes || item.streamNodes || item.stream_nodes;
   if (cdnList && Array.isArray(cdnList)) {
     var i;
     for (i = 0; i < cdnList.length && sources.length < MAX_SOURCES; i++) {
       var node = cdnList[i];
-      var nodeUrl = txt(node.url || node.path || node.streamUrl || node.stream_url || "");
+      var nodeUrl = txt(node.url || node.path || node.streamUrl || "");
       if (!nodeUrl && node.ip && node.port) {
         nodeUrl = "http://" + txt(node.ip) + ":" + txt(node.port) + txt(node.path || "");
       }
       if (nodeUrl) {
-        var h = parseInt(node.height || node.resolution || node.quality || 720, 10);
+        var nh = parseInt(node.height || 720, 10);
         sources.push(new VideoUrlSource({
           url: nodeUrl,
-          width: Math.round(h * 16 / 9),
-          height: h || 720,
+          width: Math.round(nh * 16 / 9),
+          height: nh || 720,
           container: nodeUrl.indexOf(".m3u8") > -1 ? "application/x-mpegURL" : "video/mp4",
           codec: "H.264",
           requestModifier: new RequestModifier({ allowByteSkip: true })
@@ -518,50 +333,27 @@ function extractSources(item) {
       }
     }
   }
-
-  // Sub-items / episodes
-  var episodes = item.episodes || item.episodeList || item.episode_list || item.contents;
-  if (episodes && Array.isArray(episodes)) {
-    var j;
-    for (j = 0; j < episodes.length && sources.length < MAX_SOURCES; j++) {
-      var ep = episodes[j];
-      var epUrl = txt(ep.playUrl || ep.play_url || ep.url || ep.m3u8 || "");
-      if (epUrl) {
-        sources.push(new VideoUrlSource({
-          url: epUrl,
-          width: 1920,
-          height: 1080,
-          container: epUrl.indexOf(".m3u8") > -1 ? "application/x-mpegURL" : "video/mp4",
-          codec: "H.264",
-          requestModifier: new RequestModifier({ allowByteSkip: true })
-        }));
-      }
-    }
-  }
-
   return sources;
 }
 
 function extractSubtitles(item) {
-  var subs = item.subtitles || item.subtitle || item.subList || item.sub_list || [];
+  var subs = item.subtitles || item.subtitle || [];
   if (!Array.isArray(subs)) subs = [subs];
-  var result = [];
-  var i;
+  var result = [], i;
   for (i = 0; i < subs.length; i++) {
     var sub = subs[i];
     if (!sub) continue;
-    var subUrl = txt(sub.url || sub.path || sub.file || sub.src || "");
-    var subLang = txt(sub.lang || sub.language || sub.code || "es");
-    var subLabel = txt(sub.label || sub.name || subLang);
+    var subUrl = txt(sub.url || sub.path || sub.file || "");
+    var subLang = txt(sub.lang || sub.language || "es");
     if (subUrl) {
-      result.push(new Subtitle(new PlatformID(PLATFORM_NAME, subLang), subLabel, subUrl, "application/x-subrip"));
+      result.push(new Subtitle(new PlatformID(PLATFORM_NAME, subLang), subLang, subUrl, "application/x-subrip"));
     }
   }
   return result;
 }
 
 // ============================================================
-//  GrayJay API - Source methods
+//  GrayJay Source Methods
 // ============================================================
 
 source.isContentDetailsUrl = function(url) { return /^xuper:\/\//i.test(txt(url)); };
@@ -583,12 +375,16 @@ source.search = function(query, type, order, filters) {
 
   if (!q) return new VideoPager([], false, { query: q, page: 1 });
 
+  if (!ensureAuth()) {
+    dbg("Sin auth para busqueda: " + _authError);
+    return new VideoPager([], false, { query: q, page: 1 });
+  }
+
   try {
-    var result = workerSearch(q, 1);
-    var videos = parseVideoListDeep(result);
-    var hasMore = videos.length >= SEARCH_PAGE_SIZE;
+    var result = workerCall("/api/search", { query: q, page: 1 });
+    var videos = parseDeep(result);
     dbg("Busqueda: " + videos.length + " resultados");
-    return new VideoPager(videos, hasMore, { query: q, page: 1 });
+    return new VideoPager(videos, videos.length >= SEARCH_PAGE_SIZE, { query: q, page: 1 });
   } catch (e) {
     dbg("Error busqueda: " + e);
     return new VideoPager([], false, { query: q, page: 1 });
@@ -599,90 +395,59 @@ source.getVideoDetails = function(url) {
   var contentId = "";
   var match = txt(url).match(/xuper:\/\/content\?id=([^&]+)/);
   if (match) contentId = decodeURIComponent(match[1]);
-
-  if (!contentId) {
-    var rawId = txt(url).replace(/^xuber:\/\//i, "").replace(/^content\?id=/i, "");
-    contentId = rawId;
-  }
-
+  if (!contentId) contentId = txt(url).replace(/^xuber:\/\//i, "").replace(/^content\?id=/i, "");
   if (!contentId) throw new Error("No se pudo identificar el contentId de: " + url);
 
   dbg("Detalles: " + contentId);
 
   var item = null;
-  var sources = [];
-
   try {
-    var resp = workerGetItemData(contentId);
-    item = (resp && resp.data) ? resp.data : resp;
-  } catch (e) {
-    dbg("getItemData fallo: " + e);
-  }
+    if (ensureAuth()) {
+      var resp = workerCall("/api/details", { contentId: contentId });
+      item = (resp && resp.data) ? resp.data : resp;
+    }
+  } catch (e) { dbg("getItemData fallo: " + e); }
 
-  if (!item) {
-    item = { contentId: contentId, title: contentId };
-  }
-
+  if (!item) item = { contentId: contentId, title: contentId };
   var title = extractTitle(item) || contentId;
-  var desc = extractDescription(item);
-  var thumbUrl = extractThumbnail(item);
   var authorName = extractAuthor(item);
-  var isLive = extractIsLive(item);
-  var duration = extractDuration(item);
-
-  var thumbnails = [];
-  if (thumbUrl) thumbnails.push(new Thumbnail(thumbUrl, 480));
-
-  var authorLink = new PlatformAuthorLink(
-    new PlatformID(PLATFORM_NAME, authorName || "XuperTv"),
-    authorName || "XuperTv",
-    ""
-  );
+  var thumbs = [];
+  var thumb = extractThumb(item);
+  if (thumb) thumbs.push(new Thumbnail(thumb, 480));
 
   var video = new PlatformVideo({
     id: new PlatformID(PLATFORM_NAME, contentId),
     name: title,
-    thumbnails: new Thumbnails(thumbnails),
-    author: authorLink,
-    datetime: new DateTime(item.date || item.pubDate || item.publishTime || 0),
+    thumbnails: new Thumbnails(thumbs),
+    author: new PlatformAuthorLink(new PlatformID(PLATFORM_NAME, authorName || "XuperTv"), authorName || "XuperTv", ""),
+    datetime: new DateTime(0),
     url: txt(url),
-    duration: duration,
-    viewCount: extractViewCount(item),
-    isLive: isLive
+    duration: extractDuration(item),
+    viewCount: extractViews(item),
+    isLive: extractIsLive(item)
   });
 
-  // Intentar obtener fuentes de stream via Worker
-  try {
-    sources = extractSources(item);
-    if (!sources.length) {
-      var slbResp = workerGetSlbInfo(contentId, { title: title });
-      if (slbResp && slbResp.data) {
-        sources = extractSources(slbResp.data);
-      }
-    }
-  } catch (e) {
-    dbg("Fuentes stream fallo: " + e);
-  }
+  var sources = extractSources(item);
 
-  var subs = [];
-  try { subs = extractSubtitles(item); } catch (e) { dbg("Subs fallo: " + e); }
-
-  var details = new PlatformVideoDetails({
+  return new PlatformVideoDetails({
     video: video,
-    description: desc || title,
+    description: extractDesc(item) || title,
     videoSources: new VideoSourceDescriptor(sources),
-    subtitles: subs
+    subtitles: extractSubtitles(item)
   });
-
-  return details;
 };
 
 source.getHome = function() {
   dbg("Obteniendo home...");
 
+  if (!ensureAuth()) {
+    dbg("Sin auth para home: " + _authError);
+    return new VideoPager([], false, { type: "home", page: 1 });
+  }
+
   try {
-    var result = workerHome();
-    var videos = parseVideoListDeep(result);
+    var result = workerCall("/api/home", {});
+    var videos = parseDeep(result);
     dbg("Home: " + videos.length + " videos");
     return new VideoPager(videos, videos.length >= SEARCH_PAGE_SIZE, { type: "home", page: 1 });
   } catch (e) {
@@ -693,38 +458,24 @@ source.getHome = function() {
 
 source.getVideoUrl = function(video) {
   dbg("Obteniendo URL de video...");
-
   var contentId = "";
-  if (video && video.id) {
-    contentId = txt(video.id.content || video.id.value || video.id);
-  }
-
+  if (video && video.id) contentId = txt(video.id.content || video.id.value || video.id);
   if (!contentId && video && video.url) {
-    var match = txt(video.url).match(/id=([^&]+)/);
-    if (match) contentId = decodeURIComponent(match[1]);
+    var m = txt(video.url).match(/id=([^&]+)/);
+    if (m) contentId = decodeURIComponent(m[1]);
   }
-
   if (!contentId) return [];
 
   try {
-    var resp = workerGetItemData(contentId);
-    var item = (resp && resp.data) ? resp.data : resp;
-    if (item) {
-      var sources = extractSources(item);
-      if (sources.length) return sources;
+    if (ensureAuth()) {
+      var resp = workerCall("/api/details", { contentId: contentId });
+      var item = (resp && resp.data) ? resp.data : resp;
+      if (item) {
+        var sources = extractSources(item);
+        if (sources.length) return sources;
+      }
     }
-  } catch (e) {
-    dbg("videoUrl getItemData: " + e);
-  }
-
-  try {
-    var slbResp = workerGetSlbInfo(contentId);
-    if (slbResp && slbResp.data) {
-      return extractSources(slbResp.data);
-    }
-  } catch (e) {
-    dbg("videoUrl getSlbInfo: " + e);
-  }
+  } catch (e) { dbg("videoUrl: " + e); }
 
   return [];
 };
@@ -741,26 +492,19 @@ source.getDiagnostics = function() {
   var authState = "no configurado";
 
   try {
-    var health = workerHealth();
-    workerOk = health && (health.status === "ok" || health.status === 200);
-  } catch (e) {
-    dbg("Diag health fallo: " + e);
-  }
+    var health = workerGet("/health");
+    workerOk = health && health.ok;
+  } catch (e) { dbg("Diag health: " + e); }
 
-  try {
-    var auth = ensureAuth();
-    if (auth && auth.ok) {
-      authState = "OK userId=" + auth.userId;
-    } else {
-      authState = "Fallo: " + (auth ? auth.error : "sin respuesta");
-    }
-  } catch (e) {
-    authState = "Error: " + txt(e);
+  if (_sessionId) {
+    authState = "OK session=" + _sessionId.substring(0, 8) + " uid=" + _userId;
+  } else if (_authError) {
+    authState = "Fallo: " + _authError;
   }
 
   return {
     platform: PLATFORM_NAME,
-    version: 56,
+    version: 57,
     worker: { url: wUrl || "(no configurado)", online: workerOk },
     auth: { state: authState }
   };
@@ -773,25 +517,28 @@ source.getDiagnostics = function() {
 source.enable = function(conf, settings, savedState) {
   _config = conf || {};
   _settings = settings || {};
-  _authCache = null;
+  _sessionId = "";
   _authAttempted = false;
-  dbg("Plugin habilitado v56");
+  _authError = "";
+  dbg("Plugin habilitado v57");
 };
 
 source.setSettings = function(settings) {
   _settings = settings || {};
-  _authCache = null;
+  _sessionId = "";
   _authAttempted = false;
+  _authError = "";
 };
 
 source.getSettings = function() {
   return [
-    { key: "email", label: "Email", type: "text", placeholder: "tu@email.com" },
-    { key: "password", label: "Contrasena", type: "password" },
-    { key: "user_id", label: "User ID (opcional, manual)", type: "text" },
-    { key: "user_token", label: "User Token (opcional, manual)", type: "text" },
-    { key: "portal_code", label: "Portal Code (opcional, manual)", type: "text" },
-    { key: "portal_base", label: "Portal URL (opcional, manual)", type: "text" },
+    { key: "email", label: "Email (opcional, para login)", type: "text", placeholder: "tu@email.com" },
+    { key: "password", label: "Contrasena (opcional)", type: "password" },
+    { key: "user_id", label: "User ID (requerido)", type: "text" },
+    { key: "user_token", label: "User Token (requerido)", type: "text" },
+    { key: "portal_code", label: "Portal Code (opcional)", type: "text" },
+    { key: "portal_base", label: "Portal URL (opcional)", type: "text" },
+    { key: "device_id", label: "Device ID (opcional, auto-generado)", type: "text" },
     { key: "worker_url", label: "Worker URL", type: "text", defaultValue: DEFAULT_WORKER_URL },
     { key: "debug", label: "Debug", type: "boolean", defaultValue: false }
   ];
