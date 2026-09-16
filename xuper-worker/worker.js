@@ -188,7 +188,7 @@ async function handleStream(req) {
 }
 
 // === Crypto Test ===
-function handleCryptoTest(req) {
+async function handleCryptoTest(req) {
   let body = {};
   try { body = await req.json(); } catch (_) {}
 
