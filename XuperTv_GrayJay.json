@@ -1,0 +1,21 @@
+{
+  "name": "XuperTv",
+  "description": "Fuente XuperTv para GrayJay - v56 con Cloudflare Worker",
+  "author": "cheito55",
+  "authorUrl": "https://github.com/cheito55",
+  "sourceUrl": "https://raw.githubusercontent.com/cheito55/XP/main/XuperTv_GrayJay.json",
+  "repositoryUrl": "https://github.com/cheito55/XP",
+  "scriptUrl": "./XuperTv_GrayJay.js",
+  "version": 56,
+  "iconUrl": "",
+  "id": "8d1f6f41-7d4a-4e8c-a42f-5c9b7a31e602",
+  "scriptSignature": "",
+  "scriptPublicKey": "",
+  "packages": [
+    "Http"
+  ],
+  "allowEval": false,
+  "allowUrls": [
+    "everywhere"
+  ]
+}
