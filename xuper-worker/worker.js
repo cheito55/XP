@@ -5,6 +5,8 @@
  * REPOSITORIO: https://github.com/cheito55/XP
  */
 
+import { tripleDesEncrypt, tripleDesDecrypt, desEncryptStr, hexToBytes, bytesToHex, base64Encode, base64Decode } from './crypto.js';
+
 const PKG = "com.android.msandroid";
 const VER = "49902";
 const UA = "Ranger/4.9.4-17294ac0";
@@ -58,80 +60,8 @@ const CORS = {
 function json(d, s) { return new Response(JSON.stringify(d), { status: s || 200, headers: { "Content-Type": "application/json", ...CORS } }); }
 function err(m, s) { return json({ ok: false, error: m }, s || 400); }
 
-// === Crypto Helpers (Web Crypto API) ===
-function hexToBytes(hex) {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
-  }
-  return bytes;
-}
-
-function bytesToHex(bytes) {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function base64Encode(bytes) {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-function base64Decode(str) {
-  const binary = atob(str);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-// 3DES-ECB decrypt (the a8/b.a() method)
-async function tripleDesDecrypt(ciphertext, keyHex) {
-  const keyBytes = hexToBytes(keyHex);
-  const cipher = await crypto.subtle.importKey(
-    "raw", keyBytes, { name: "DES-EDE3-ECB" }, false, ["decrypt"]
-  );
-  const inputBytes = base64Decode(ciphertext);
-  const decrypted = await crypto.subtle.decrypt({ name: "DES-EDE3-ECB" }, cipher, inputBytes);
-  return new TextDecoder().decode(decrypted);
-}
-
-// 3DES-ECB encrypt (the a8/b.b() method)
-async function tripleDesEncrypt(plaintext, keyHex) {
-  const keyBytes = hexToBytes(keyHex);
-  const cipher = await crypto.subtle.importKey(
-    "raw", keyBytes, { name: "DES-EDE3-ECB" }, false, ["encrypt"]
-  );
-  const inputBytes = new TextEncoder().encode(plaintext);
-  const encrypted = await crypto.subtle.encrypt({ name: "DES-EDE3-ECB" }, cipher, inputBytes);
-  return base64Encode(new Uint8Array(encrypted));
-}
-
-// DES-ECB encrypt (the b3/d.a() method)
-async function desEncrypt(plaintext, keyStr) {
-  const keyBytes = new TextEncoder().encode(keyStr);
-  const cipher = await crypto.subtle.importKey(
-    "raw", keyBytes, { name: "DES-ECB" }, false, ["encrypt"]
-  );
-  const inputBytes = new TextEncoder().encode(plaintext);
-  const encrypted = await crypto.subtle.encrypt({ name: "DES-ECB" }, cipher, inputBytes);
-  return base64Encode(new Uint8Array(encrypted));
-}
-
-// AES-CBC decrypt (the AbstractC3617a.m8675a method)
-async function aesCbcDecrypt(ciphertext, keyStr, ivStr) {
-  const keyBytes = new TextEncoder().encode(keyStr);
-  const ivBytes = new TextEncoder().encode(ivStr);
-  const cipher = await crypto.subtle.importKey(
-    "raw", keyBytes, { name: "AES-CBC" }, false, ["decrypt"]
-  );
-  const inputBytes = base64Decode(ciphertext);
-  const decrypted = await crypto.subtle.decrypt({ name: "AES-CBC", iv: ivBytes }, cipher, inputBytes);
-  return new TextDecoder().decode(decrypted);
-}
+// === Crypto (pure JS DES/3DES - ver crypto.js) ===
+// tripleDesEncrypt, tripleDesDecrypt, desEncryptStr importados de crypto.js
 
 // === Portal WS Connection (via HTTP CONNECT) ===
 async function connectToPortal() {
@@ -258,7 +188,7 @@ async function handleStream(req) {
 }
 
 // === Crypto Test ===
-async function handleCryptoTest(req) {
+function handleCryptoTest(req) {
   let body = {};
   try { body = await req.json(); } catch (_) {}
 
@@ -266,17 +196,13 @@ async function handleCryptoTest(req) {
   try {
     // Test 3DES encrypt/decrypt
     const plaintext = body.text || "test_message";
-    const encrypted = await tripleDesEncrypt(plaintext, CRYPTO.tripleDesKey);
-    const decrypted = await tripleDesDecrypt(encrypted, CRYPTO.tripleDesKey);
-    results.tripleDes = { plaintext: plaintext, encrypted: encrypted, decrypted: decrypted, match: plaintext === decrypted };
+    const encrypted = tripleDesEncrypt(plaintext, CRYPTO.tripleDesKey);
+    const decrypted = tripleDesDecrypt(encrypted, CRYPTO.tripleDesKey);
+    results.tripleDes = { plaintext: plaintext, encrypted: encrypted, decrypted: decrypted, match: plaintext === decrypted, hexLen: hexToBytes(encrypted).length };
 
     // Test DES encrypt
-    const desEncrypted = await desEncrypt(plaintext, CRYPTO.desKey);
+    const desEncrypted = desEncryptStr(plaintext, CRYPTO.desKey);
     results.des = { plaintext: plaintext, encrypted: desEncrypted };
-
-    // Test AES-CBC decrypt
-    const aesDecrypted = await aesCbcDecrypt(body.aesCiphertext || "", CRYPTO.aesKey, CRYPTO.aesIv);
-    results.aes = { decrypted: aesDecrypted };
   } catch (e) {
     results.error = e.message;
   }
@@ -353,7 +279,7 @@ export default {
       if (p === "/api/notice") return await handleNotice();
       if (p === "/api/ads" && request.method === "POST") return await handleAds(request);
       if (p === "/api/tokens" && request.method === "POST") return await handleTokenUpdate(request);
-      if (p === "/api/crypto-test" && request.method === "POST") return await handleCryptoTest(request);
+      if (p === "/api/crypto-test" && request.method === "POST") return handleCryptoTest(request);
       return err("Not found: " + p, 404);
     } catch (e) { return err("Error: " + e.message, 500); }
   }
