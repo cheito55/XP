@@ -110,6 +110,20 @@ function customB64Encode(bytes) {
   return result;
 }
 
+function customB64Decode(str) {
+  const stdAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let standard = "";
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    const idx = CUSTOM_B64.indexOf(ch);
+    standard += (idx === -1) ? ch : stdAlphabet[idx];
+  }
+  const binary = atob(standard);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 async function encryptRequest(bodyObj) {
   const jsonStr = JSON.stringify(bodyObj);
   const encBytes = await aesEncryptStr(jsonStr, CRYPTO.aesKey, CRYPTO.aesIv);
