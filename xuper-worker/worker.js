@@ -33,9 +33,9 @@ const CAPTURED = {
     { id: "cyx_50fdcc0817d61_720p", name: "Canal en Vivo", type: "live", tag: "free" }
   ],
   vod: [
-    { mediaCode: "4DC7E29C0EF941318307436A9CCDCDE0", title: "Pelicula 1", type: "vod", tag: "free" },
-    { mediaCode: "7C81D68A2E9A4A3C8B3AEED8CE549912", title: "Pelicula 2", type: "vod", tag: "free" },
-    { mediaCode: "496D2957D3EC45EFB2F34BDCF3B877C0", title: "Pelicula 3", type: "vod", tag: "free" }
+    { mediaCode: "BCF940BE93754676AB0877E91258675D", title: "Pelicula (VOD 1)", type: "vod", tag: "free" },
+    { mediaCode: "45063077C8374DCF8755FF214D8DD0B4", title: "Pelicula (VOD 2)", type: "vod", tag: "free" },
+    { mediaCode: "4DC7E29C0EF941318307436A9CCDCDE0", title: "Canal / Contenido", type: "vod", tag: "free" }
   ]
 };
 
@@ -309,10 +309,14 @@ async function handleLiveData(channelCode) {
     return json({ ok: true, data: result.data });
   }
 
-  const liveUrl = "http://64.31.56.75:23455/live/" + code + ".m3u8";
+  const freshHost = "23.227.144.242:44822";
+  const liveUrl = "http://" + freshHost + "/live/" + code + ".m3u8";
   return json({
     ok: true,
-    data: { streamUrl: liveUrl, headers: { "User-Agent": UA } }
+    data: {
+      streamUrl: liveUrl,
+      headers: { "User-Agent": UA, "Referer": "http://" + freshHost + "/" }
+    }
   });
 }
 
@@ -329,6 +333,23 @@ async function handleVodStream(mediaCode) {
 
   if (result.ok && result.data && result.data.data) {
     return json({ ok: true, data: result.data });
+  }
+
+  const freshVods = {
+    "BCF940BE93754676AB0877E91258675D": "http://69.162.99.51:31412/vod/BCF940BE93754676AB0877E91258675D_media.ts?content_auth2=/vod/%3Ftag%3Dslb%26host%3D69.162.99.51:31412%26app_id%3Dcom.android.msandroid%26trans_id%3DlWAlK1oHN0c_i6cRrfYFhEAY%26app_version%3D49902%26client_ip%3D181.13.73.42%26dev_id%3D761cd6edc9681aa5d27dd1e1fa38ae08%26auth_id%3D556784760_com.android.msandroid__0%26user_id%3D556784760%26expired%3D1789593919%26token%3D8f60f9f0054946ba09309ffd3136a4ba&content_license2=tag%3Dslb%26scheme%3Dslb%26app_id%3Dcom.android.msandroid%26media_code%3DBCF940BE93754676AB0877E91258675D%26expired%3D1789593919%26token%3D180867fe7fe9c3865279913b2bad828a",
+    "45063077C8374DCF8755FF214D8DD0B4": "http://216.245.209.219:11114/vod/45063077C8374DCF8755FF214D8DD0B4_media.mp4?content_auth2=/vod/%3Ftag%3Dslb%26host%3D216.245.209.219:11114%26app_id%3Dcom.android.msandroid%26trans_id%3DlWAlK1oHN0c_2jEa2TPfpbzN%26app_version%3D49902%26client_ip%3D181.13.73.42%26dev_id%3D761cd6edc9681aa5d27dd1e1fa38ae08%26auth_id%3D556784760_com.android.msandroid__0%26user_id%3D556784760%26expired%3D1789593919%26token%3D22f69b748bbf933a258f7225b34e1591&content_license2=tag%3Dslb%26scheme%3Dslb%26app_id%3Dcom.android.msandroid%26media_code%3D45063077C8374DCF8755FF214D8DD0B4%26expired%3D1789593919%26token%3D0a5130f0d397aa334f11a1ee51415c7c"
+  };
+
+  const freshUrl = freshVods[mediaCode] || "";
+  if (freshUrl) {
+    return json({
+      ok: true,
+      data: {
+        streamUrl: freshUrl,
+        headers: { "User-Agent": UA },
+        source: "captured-fresh"
+      }
+    });
   }
 
   return err("VOD stream no disponible - login necesario para URLs frescas");

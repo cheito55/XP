@@ -1,5 +1,5 @@
 /*
- * GrayJay Plugin - XuperTv v85
+ * GrayJay Plugin - XuperTv v86
  * TMDB thumbnails + Busqueda + API cifrada
  * ES5 compatible (sin const/let/arrow/class/from)
  * REPOSITORIO: https://github.com/cheito55/XP
@@ -20,13 +20,15 @@ var _tmdbKey = "";
 
 var CAPTURED_ITEMS = [
   { id: "cyx_50fdcc0817d61_720p", title: "Canal En Vivo 720p", isLive: true },
-  { id: "4DC7E29C0EF941318307436A9CCDCDE0", title: "Pelicula Capturada 1", isLive: false },
-  { id: "7C81D68A2E9A4A3C8B3AEED8CE549912", title: "Pelicula Capturada 2", isLive: false },
-  { id: "496D2957D3EC45EFB2F34BDCF3B877C0", title: "Pelicula Capturada 3", isLive: false }
+  { id: "BCF940BE93754676AB0877E91258675D", title: "Pelicula VOD 1 (BCF9)", isLive: false },
+  { id: "45063077C8374DCF8755FF214D8DD0B4", title: "Pelicula VOD 2 (4506)", isLive: false },
+  { id: "4DC7E29C0EF941318307436A9CCDCDE0", title: "Pelicula Capturada 1", isLive: false }
 ];
 
 var STREAMS = {
   "cyx_50fdcc0817d61_720p": { live: "http://23.227.144.242:44822/live/cyx_50fdcc0817d61_720p.m3u8", isLive: true },
+  "BCF940BE93754676AB0877E91258675D": { vod: "http://69.162.99.51:31412/vod/BCF940BE93754676AB0877E91258675D_media.ts?content_auth2=/vod/%3Ftag%3Dslb%26host%3D69.162.99.51:31412%26app_id%3Dcom.android.msandroid%26trans_id%3DlWAlK1oHN0c_i6cRrfYFhEAY%26app_version%3D49902%26client_ip%3D181.13.73.42%26dev_id%3D761cd6edc9681aa5d27dd1e1fa38ae08%26auth_id%3D556784760_com.android.msandroid__0%26user_id%3D556784760%26expired%3D1789593919%26token%3D8f60f9f0054946ba09309ffd3136a4ba&content_license2=tag%3Dslb%26scheme%3Dslb%26app_id%3Dcom.android.msandroid%26media_code%3DBCF940BE93754676AB0877E91258675D%26expired%3D1789593919%26token%3D180867fe7fe9c3865279913b2bad828a", isLive: false },
+  "45063077C8374DCF8755FF214D8DD0B4": { vod: "http://216.245.209.219:11114/vod/45063077C8374DCF8755FF214D8DD0B4_media.mp4?content_auth2=/vod/%3Ftag%3Dslb%26host%3D216.245.209.219:11114%26app_id%3Dcom.android.msandroid%26trans_id%3DlWAlK1oHN0c_2jEa2TPfpbzN%26app_version%3D49902%26client_ip%3D181.13.73.42%26dev_id%3D761cd6edc9681aa5d27dd1e1fa38ae08%26auth_id%3D556784760_com.android.msandroid__0%26user_id%3D556784760%26expired%3D1789593919%26token%3D22f69b748bbf933a258f7225b34e1591&content_license2=tag%3Dslb%26scheme%3Dslb%26app_id%3Dcom.android.msandroid%26media_code%3D45063077C8374DCF8755FF214D8DD0B4%26expired%3D1789593919%26token%3D0a5130f0d397aa334f11a1ee51415c7c", isLive: false },
   "4DC7E29C0EF941318307436A9CCDCDE0": { vod: "http://208.115.207.227:2701/vod/4DC7E29C0EF941318307436A9CCDCDE0_media.ts", isLive: false },
   "7C81D68A2E9A4A3C8B3AEED8CE549912": { vod: "http://208.115.207.227:2701/vod/7C81D68A2E9A4A3C8B3AEED8CE549912_media.ts", isLive: false },
   "496D2957D3EC45EFB2F34BDCF3B877C0": { vod: "http://208.115.207.227:2701/vod/496D2957D3EC45EFB2F34BDCF3B877C0_media.ts", isLive: false }
@@ -389,5 +391,5 @@ source.getDiagnostics = function() {
       if (t && t.isOk && t.body) { var td = safeParseJson(t.body); tmdbOk = !!(td && !td.status_code); }
     }
   } catch (e) {}
-  return { platform: PLATFORM, version: 85, workerOnline: wOk, tmdbConfigured: tmdbOk, captured: CAPTURED_ITEMS.length };
+  return { platform: PLATFORM, version: 86, workerOnline: wOk, tmdbConfigured: tmdbOk, captured: CAPTURED_ITEMS.length };
 };
