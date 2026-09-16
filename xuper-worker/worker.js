@@ -22,7 +22,7 @@ const API_DOMAINS = [
   "sydrgt.a878kkoyc.com"
 ];
 
-const TMDB_KEY = "1c7e5ac8a89d07489b3b14d7b3b1b0a2";
+const TMDB_KEY = "a5908e29bac47d6ef32f27c44ecda02a"; // key del usuario
 
 const CAPTURED = {
   userId: "556784760",
@@ -374,9 +374,10 @@ async function handleSlb(mediaCode) {
   return err("SLB info no disponible");
 }
 
-async function handleTmdbSearch(query) {
+async function handleTmdbSearch(query, env) {
   try {
-    const url = "https://api.themoviedb.org/3/search/multi?api_key=" + TMDB_KEY +
+    const key = (env && env.TMDB_KEY) || TMDB_KEY;
+    const url = "https://api.themoviedb.org/3/search/multi?api_key=" + key +
       "&query=" + encodeURIComponent(query) + "&language=es-MX&page=1&include_adult=false";
     const resp = await fetch(url);
     const data = await resp.json();
@@ -463,7 +464,7 @@ export default {
 
       if (path === "/api/tmdb") {
         const query = url.searchParams.get("q") || "";
-        return handleTmdbSearch(query);
+        return handleTmdbSearch(query, env);
       }
 
       if (path === "/api/crypto-test") {
