@@ -3,4 +3,4 @@ main = "worker.js"
 compatibility_date = "2024-09-01"
 
 [vars]
-WORKER_VERSION = "4.0"
+WORKER_VERSION = "9.0"

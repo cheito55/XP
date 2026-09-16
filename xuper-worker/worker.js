@@ -1,9 +1,7 @@
-import { connect } from "cloudflare:sockets";
-
 /**
- * XuperTv Bridge - Cloudflare Worker v8.0
- * API REST descifrada por ingeniería inversa del APK
- * Login + Home + Live + VOD + Streaming
+ * XuperTv Bridge - Cloudflare Worker v9.0
+ * API cifrada con AES-CBC + custom Base64
+ * Login + Home + Live + VOD + TMDB enrichment
  * REPOSITORIO: https://github.com/cheito55/XP
  */
 
@@ -12,8 +10,6 @@ const VER = "49902";
 const UA = "Ranger/4.9.4-17294ac0";
 
 const CRYPTO = {
-  tripleDesKey: "1b494e53756c664c2f44465245733572",
-  desKey: "okwVTyAW",
   aesKey: "b972E8a5A4e0e8Ff",
   aesIv: "2c6b361ee550e80c"
 };
@@ -26,11 +22,15 @@ const API_DOMAINS = [
   "sydrgt.a878kkoyc.com"
 ];
 
+const TMDB_KEY = "1c7e5ac8a89d07489b3b14d7b3b1b0a2";
+
 const CAPTURED = {
   userId: "556784760",
   devId: "761cd6edc9681aa5d27dd1e1fa38ae08",
+  userToken: "",
+  portalCode: "",
   channels: [
-    { id: "cyx_50fdcc0817d61_720p", name: "Canal en Vivo 1", type: "live", tag: "free" }
+    { id: "cyx_50fdcc0817d61_720p", name: "Canal en Vivo", type: "live", tag: "free" }
   ],
   vod: [
     { mediaCode: "4DC7E29C0EF941318307436A9CCDCDE0", title: "Pelicula 1", type: "vod", tag: "free" },
@@ -42,8 +42,8 @@ const CAPTURED = {
 let SESSION = {
   userId: CAPTURED.userId,
   devId: CAPTURED.devId,
-  userToken: "",
-  portalCode: "",
+  userToken: CAPTURED.userToken || "",
+  portalCode: CAPTURED.portalCode || "",
   apiDomain: API_DOMAINS[0],
   loggedIn: false
 };
@@ -110,25 +110,16 @@ function customB64Encode(bytes) {
   return result;
 }
 
-function customB64Decode(str) {
-  const stdAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let standard = "";
-  for (let i = 0; i < str.length; i++) {
-    const ch = str[i];
-    const idx = CUSTOM_B64.indexOf(ch);
-    standard += (idx === -1) ? ch : stdAlphabet[idx];
-  }
-  const binary = atob(standard);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+async function encryptRequest(bodyObj) {
+  const jsonStr = JSON.stringify(bodyObj);
+  const encBytes = await aesEncryptStr(jsonStr, CRYPTO.aesKey, CRYPTO.aesIv);
+  return customB64Encode(encBytes);
 }
 
-// === Call PortalCore API ===
 async function callApi(path, body, domain) {
   const host = domain || SESSION.apiDomain || API_DOMAINS[0];
-  const url = `http://${host}${path}`;
-  
+  const url = "http://" + host + path;
+
   try {
     const resp = await fetch(url, {
       method: "POST",
@@ -148,7 +139,23 @@ async function callApi(path, body, domain) {
   }
 }
 
-async function callApiWithFallback(path, body) {
+async function callApiEncrypted(path, bodyObj, domain) {
+  const encrypted = await encryptRequest(bodyObj);
+  return callApi(path, { data: encrypted }, domain);
+}
+
+async function callApiWithFallback(path, bodyObj) {
+  for (const domain of API_DOMAINS) {
+    const result = await callApiEncrypted(path, bodyObj, domain);
+    if (result.ok && result.data) {
+      SESSION.apiDomain = domain;
+      if (result.data.returnCode !== "portal200001") return result;
+    }
+  }
+  return { ok: false, error: "All API domains returned errors or version blocked" };
+}
+
+async function callApiRawWithFallback(path, body) {
   for (const domain of API_DOMAINS) {
     const result = await callApi(path, body, domain);
     if (result.ok && result.data) {
@@ -159,10 +166,9 @@ async function callApiWithFallback(path, body) {
   return { ok: false, error: "All API domains failed" };
 }
 
-// === Login ===
 async function handleLogin(email, password) {
   if (!email || !password) return err("Email y password requeridos");
-  
+
   const body = {
     email: email,
     password: password,
@@ -172,9 +178,9 @@ async function handleLogin(email, password) {
     channel: "googleplay",
     language: "es"
   };
-  
+
   const result = await callApiWithFallback("/api/portalCore/v6/login", body);
-  
+
   if (result.ok && result.data) {
     const resp = result.data;
     if (resp.data && (resp.data.userId || resp.data.userToken)) {
@@ -188,7 +194,18 @@ async function handleLogin(email, password) {
   return err(result.error || "Login failed");
 }
 
-// === Home ===
+async function handleActive() {
+  const body = {
+    userId: SESSION.userId,
+    devId: SESSION.devId,
+    pkg: PKG,
+    version: VER,
+    userToken: SESSION.userToken,
+    portalCode: SESSION.portalCode
+  };
+  return json(await callApiWithFallback("/api/portalCore/v6/active", body));
+}
+
 async function handleHome() {
   const body = {
     homePageCode: "home",
@@ -199,60 +216,70 @@ async function handleHome() {
     userToken: SESSION.userToken || CAPTURED.devId,
     portalCode: SESSION.portalCode || "portal"
   };
-  
+
   const result = await callApiWithFallback("/api/portalCore/getHome", body);
-  
+
   if (result.ok && result.data && result.data.returnCode === "portal200") {
     const d = result.data.data || result.data;
     const channels = d.channels || d.liveList || d.columnList || [];
     const vod = d.vod || d.vodList || d.contentList || [];
     const items = [];
-    
+
     const list = Array.isArray(channels) ? channels : [];
-    for (const ch of list) {
+    for (let i = 0; i < list.length; i++) {
+      const ch = list[i];
       items.push({
         contentId: ch.channelCode || ch.channel_code || ch.id || "",
         title: ch.channelName || ch.name || ch.id || "",
         type: "live",
         isLive: true,
-        tag: "free",
-        mediaCode: ch.channelCode || ch.channel_code || ch.id || ""
+        tag: ch.tag || "free",
+        mediaCode: ch.channelCode || ch.channel_code || ch.id || "",
+        logoUrl: ch.logoUrl || ch.picUrl || ch.channelLogo || "",
+        catId: ch.catId || ch.categoryId || ""
       });
     }
-    
+
     const vodList = Array.isArray(vod) ? vod : [];
-    for (const v of vodList) {
+    for (let i = 0; i < vodList.length; i++) {
+      const v = vodList[i];
       items.push({
         contentId: v.mediaCode || v.media_code || v.contentId || v.id || "",
         title: v.title || v.name || v.vodName || "",
         type: "vod",
         isLive: false,
         tag: v.tag || "free",
-        mediaCode: v.mediaCode || v.media_code || v.contentId || v.id || ""
+        mediaCode: v.mediaCode || v.media_code || v.contentId || v.id || "",
+        logoUrl: v.logoUrl || v.picUrl || v.poster || "",
+        year: v.year || "",
+        catId: v.catId || v.categoryId || ""
       });
     }
-    
-    if (items.length > 0) return json({ ok: true, data: items });
+
+    if (items.length > 0) return json({ ok: true, data: items, source: "api" });
   }
-  
-  // Fallback
+
   return json({
     ok: true,
-    data: CAPTURED.channels.map(ch => ({
-      contentId: ch.id, title: ch.name, type: "live", isLive: true,
-      tag: ch.tag, mediaCode: ch.id
-    })).concat(CAPTURED.vod.map(v => ({
-      contentId: v.mediaCode, title: v.title, type: "vod", isLive: false,
-      tag: v.tag, mediaCode: v.mediaCode
-    }))),
-    note: "Datos capturados - Login necesario para contenido dinamico"
+    data: CAPTURED.channels.map(function(ch) {
+      return {
+        contentId: ch.id, title: ch.name, type: "live", isLive: true,
+        tag: ch.tag, mediaCode: ch.id, logoUrl: ""
+      };
+    }).concat(CAPTURED.vod.map(function(v) {
+      return {
+        contentId: v.mediaCode, title: v.title, type: "vod", isLive: false,
+        tag: v.tag, mediaCode: v.mediaCode, logoUrl: ""
+      };
+    })),
+    source: "captured",
+    note: "Datos capturados - login o cifrado puede fallar"
   });
 }
 
-// === Live ===
 async function handleLiveData(channelCode) {
-  const code = channelCode || CAPTURED.channels[0]?.id || "";
-  
+  const code = channelCode || CAPTURED.channels[0].id;
+
   const body = {
     userToken: SESSION.userToken || CAPTURED.devId,
     userId: SESSION.userId || CAPTURED.userId,
@@ -261,21 +288,20 @@ async function handleLiveData(channelCode) {
     channelCode: code,
     num: 1
   };
-  
+
   const result = await callApiWithFallback("/api/portalCore/v5/getLiveData", body);
-  
+
   if (result.ok && result.data && result.data.data) {
     return json({ ok: true, data: result.data });
   }
-  
-  const liveUrl = `http://23.227.144.242:44822/live/${code}.m3u8`;
+
+  const liveUrl = "http://64.31.56.75:23455/live/" + code + ".m3u8";
   return json({
     ok: true,
     data: { streamUrl: liveUrl, headers: { "User-Agent": UA } }
   });
 }
 
-// === VOD Stream ===
 async function handleVodStream(mediaCode) {
   const body = {
     userToken: SESSION.userToken || CAPTURED.devId,
@@ -284,28 +310,72 @@ async function handleVodStream(mediaCode) {
     type: "vod",
     mediaCode: mediaCode
   };
-  
+
   const result = await callApiWithFallback("/api/portalCore/v9/startPlayVOD", body);
-  
+
   if (result.ok && result.data && result.data.data) {
     return json({ ok: true, data: result.data });
   }
-  
-  return err("VOD stream not available - login needed");
+
+  return err("VOD stream no disponible - login necesario para URLs frescas");
 }
 
-// === Health ===
+async function handleSlb(mediaCode) {
+  const body = {
+    userToken: SESSION.userToken || CAPTURED.devId,
+    userId: SESSION.userId || CAPTURED.userId,
+    portalCode: SESSION.portalCode || "portal",
+    mediaCode: mediaCode,
+    pkg: PKG,
+    version: VER
+  };
+
+  const result = await callApiWithFallback("/api/portalCore/v13_1/getSlbInfo", body);
+
+  if (result.ok && result.data) {
+    return json({ ok: true, data: result.data });
+  }
+
+  return err("SLB info no disponible");
+}
+
+async function handleTmdbSearch(query) {
+  try {
+    const url = "https://api.themoviedb.org/3/search/multi?api_key=" + TMDB_KEY +
+      "&query=" + encodeURIComponent(query) + "&language=es-MX&page=1&include_adult=false";
+    const resp = await fetch(url);
+    const data = await resp.json();
+    const results = [];
+    if (data.results) {
+      for (let i = 0; i < data.results.length; i++) {
+        const item = data.results[i];
+        if (item.media_type === "movie" || item.media_type === "tv") {
+          results.push({
+            tmdbId: item.id,
+            mediaType: item.media_type,
+            title: item.title || item.name || "",
+            posterPath: item.poster_path || "",
+            backdropPath: item.backdrop_path || "",
+            year: (item.release_date || item.first_air_date || "").substring(0, 4),
+            overview: (item.overview || "").substring(0, 200)
+          });
+        }
+      }
+    }
+    return json({ ok: true, results: results });
+  } catch (e) {
+    return json({ ok: false, error: e.message });
+  }
+}
+
 function handleHealth() {
   return json({
-    ok: true, version: "8.0", session: SESSION,
+    ok: true, version: "9.0", session: SESSION,
     apiDomains: API_DOMAINS,
-    crypto: {
-      aesKey: CRYPTO.aesKey, aesIv: CRYPTO.aesIv,
-      customBase64Alphabet: CUSTOM_B64.substring(0, 20) + "..."
-    },
     endpoints: [
       "/health", "/api/login", "/api/config", "/api/home",
-      "/api/live", "/api/stream", "/api/crypto-test"
+      "/api/live", "/api/stream", "/api/slb",
+      "/api/active", "/api/tmdb", "/api/crypto-test"
     ]
   });
 }
@@ -321,56 +391,72 @@ async function handleConfig(req) {
   return json({ ok: true, session: SESSION });
 }
 
-// === Main handler ===
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
-    
+
     if (method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-    
+
     try {
       if (path === "/health" || path === "/") return handleHealth();
-      
+
       if (path === "/api/login" && method === "POST") {
         const body = await request.json();
         return handleLogin(body.email, body.password);
       }
-      
+
+      if (path === "/api/active" && method === "POST") return handleActive();
       if (path === "/api/config" && method === "POST") return handleConfig(request);
       if (path === "/api/home") return handleHome();
-      
+
       if (path === "/api/live") {
         const body = method === "POST" ? await request.json() : {};
         return handleLiveData(body.channelCode || body.id);
       }
-      
+
       if (path === "/api/stream" && method === "POST") {
         const body = await request.json();
         return handleVodStream(body.mediaCode || body.id);
       }
-      
+
+      if (path === "/api/slb" && method === "POST") {
+        const body = await request.json();
+        return handleSlb(body.mediaCode || body.id);
+      }
+
+      if (path === "/api/tmdb") {
+        const query = url.searchParams.get("q") || "";
+        return handleTmdbSearch(query);
+      }
+
       if (path === "/api/crypto-test") {
         try {
-          const testStr = "hello world";
-          const encBytes = await aesEncryptStr(testStr, CRYPTO.aesKey, CRYPTO.aesIv);
-          const encB64 = customB64Encode(encBytes);
-          const decStr = await aesDecryptStr(encBytes, CRYPTO.aesKey, CRYPTO.aesIv);
-          return json({ ok: true, test: testStr, encrypted: encB64.substring(0, 30) + "...", match: decStr === testStr });
+          const testObj = { test: "hello world" };
+          const encrypted = await encryptRequest(testObj);
+          const decResult = await aesDecryptStr(
+            customB64Decode(encrypted), CRYPTO.aesKey, CRYPTO.aesIv
+          );
+          const decrypted = JSON.parse(decResult);
+          return json({
+            ok: true,
+            original: testObj,
+            encrypted: encrypted.substring(0, 40) + "...",
+            match: decrypted.test === testObj.test
+          });
         } catch (e) {
           return json({ ok: false, error: e.message });
         }
       }
-      
-      // Proxy any portalCore call
+
       if (path.startsWith("/api/proxy/")) {
         const apiPath = "/" + path.replace("/api/proxy/", "");
         const body = method === "POST" ? await request.json() : {};
-        const result = await callApiWithFallback(apiPath, body);
+        const result = await callApiRawWithFallback(apiPath, body);
         return json(result);
       }
-      
+
       return err("Endpoint no encontrado: " + path, 404);
     } catch (e) {
       return err("Error: " + e.message, 500);
