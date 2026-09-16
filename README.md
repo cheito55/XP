@@ -1,74 +1,41 @@
-# XuperTv - GrayJay Source Plugin v70
+# XuperTv - Fuente GrayJay
 
-Plugin para GrayJay que reproduce contenido de XuperTv usando un Cloudflare Worker como proxy.
+Fuente para GrayJay que conecta con la app XuperTv/Brasiltv.
 
 ## Archivos
 
-- `XuperTv_GrayJay.json` - Manifest del plugin (cargar en GrayJay)
-- `XuperTv_GrayJay.js` - Plugin GrayJay (ES5 puro)
-- `xuper-worker/worker.js` - Cloudflare Worker v70 (proxy + crypto)
-- `xuper-worker/crypto.js` - DES/3DES implementación pura JS
-- `xuper-worker/wrangler.toml` - Config de Wrangler
+| Archivo | Descripcion |
+|---------|-------------|
+| `XuperTv_GrayJay.js` | Plugin GrayJay v80 - ES5 puro |
+| `XuperTv_GrayJay.json` | Manifest del plugin |
+| `xuper-worker/worker.js` | Cloudflare Worker v8.0 - API REST |
+| `xuper-worker/crypto.js` | DES/3DES/AES + Base64 custom |
 
-## Instalación GrayJay
+## Configuracion
 
-1. Abre GrayJay → Settings → Sources → Add Source
-2. Pega la URL raw del JSON:
-   `https://raw.githubusercontent.com/cheito55/XP/main/XuperTv_GrayJay.json`
-3. El plugin se carga automáticamente
+1. Despliega el Worker en Cloudflare
+2. En GrayJay, agrega el repositorio: `https://github.com/cheito55/XP`
+3. Configura la URL del Worker en los settings del plugin
 
-## Criptografía descifrada (ingeniería inversa APK)
+## API Endpoints
 
-Claves extraídas del smali del APK:
+| Endpoint | Metodo | Descripcion |
+|----------|--------|-------------|
+| `/health` | GET | Estado del Worker |
+| `/api/login` | POST | Login con email/password |
+| `/api/config` | POST | Actualizar sesion |
+| `/api/home` | GET | Lista de canales y VOD |
+| `/api/live` | POST | Datos de stream en vivo |
+| `/api/stream` | POST | URL de stream VOD |
+| `/api/proxy/*` | POST | Proxy a API portalCore |
 
-| Algoritmo | Clave | Uso |
-|-----------|-------|-----|
-| 3DES/ECB/PKCS5 | `1b494e53756c664c2f44465245733572` (hex) | SharedPreferences encrypt/decrypt |
-| DES/ECB | `okwVTyAW` (ASCII) | HTTP interceptor host |
-| AES/CBC | `b972E8a5A4e0e8Ff` + IV `2c6b361ee550e80c` | brasiltv utils |
+## Credenciales
 
-Clases fuente en el APK:
-- `a8/b.smali` - 3DES (encrypt/decrypt)
-- `b3/d.smali` - DES con `DES/ECB`
-- `b3/a.smali` - AES con clave `b972E8a5A4e0e8Ff`
-- `za/g.smali` - SharedPreferences con clave `1b49...`
-- `d7/a.smali` - OkHttp interceptor (ReqSource: own)
+- Email: `syeromero.tv@gmail.com`
+- Password: `Sarilu2412`
 
-## Test de criptografía
+## Notas
 
-```bash
-curl -X POST https://xuper-bridge.cheito55.workers.dev/api/crypto-test \
-  -H "Content-Type: application/json" \
-  -d '{"text":"hola_mundo"}'
-```
-
-Respuesta: `"match": true` cuando encrypt/decrypt es consistente.
-
-## Tokens
-
-Los tokens de streaming expiran después de ~4 horas. Para actualizar:
-
-1. Captura tráfico con HydraProxy + PCAPdroid mientras la app reproduce contenido
-2. Exporta como HAR
-3. Envía los tokens al Worker:
-   ```bash
-   curl -X POST https://xuper-bridge.cheito55.workers.dev/api/tokens \
-     -H "Content-Type: application/json" \
-     -d '{"slbAuth": "TOKEN_SLB", "rangerId": "TU_RANGER_ID"}'
-   ```
-
-## Estado actual
-
-- ✅ Criptografía del APK descifrada (3DES, DES, AES)
-- ✅ Worker v70 con crypto funcional
-- ✅ Home (contenido pre-capturado)
-- ✅ Streaming (con tokens válidos)
-- ✅ CDN proxy (bypass CORS)
-- ⏳ WS binario encriptado - requiere más análisis del protocolo de frames
-- ❌ Búsqueda (requiere WS)
-
-## Limitaciones
-
-El protocolo WebSocket binario del portal XuperTv usa un framing propio con encriptación.
-Las claves 3DES/DES/AES están extraídas, pero el formato del frame WS (header 4 bytes + body encriptado)
-requiere más ingeniería inversa del código nativo (`libranger-jni.so`, `libcast-jni.so`).
+- La API de XuperTv usa dominios rotativos
+- Los tokens expiran cada ~4 horas
+- El Worker intenta multiples dominios automaticamente

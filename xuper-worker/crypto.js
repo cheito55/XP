@@ -215,3 +215,84 @@ export function desEncryptStr(plaintext, keyStr) {
 }
 
 export { hexToBytes, bytesToHex, base64Encode, base64Decode };
+
+// === AES-CBC/PKCS5Padding (Web Crypto API) ===
+export async function aesEncrypt(plaintext, keyStr, ivStr) {
+  const keyBytes = new TextEncoder().encode(keyStr);
+  const ivBytes = new TextEncoder().encode(ivStr);
+  
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", keyBytes.slice(0, 16), { name: "AES-CBC" }, false, ["encrypt"]
+  );
+  
+  const padded = pkcs5Pad(new TextEncoder().encode(plaintext));
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-CBC", iv: ivBytes }, cryptoKey, padded);
+  return new Uint8Array(encrypted);
+}
+
+export async function aesDecrypt(ciphertext, keyStr, ivStr) {
+  const keyBytes = new TextEncoder().encode(keyStr);
+  const ivBytes = new TextEncoder().encode(ivStr);
+  
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", keyBytes.slice(0, 16), { name: "AES-CBC" }, false, ["decrypt"]
+  );
+  
+  const decrypted = await crypto.subtle.decrypt({ name: "AES-CBC", iv: ivBytes }, cryptoKey, ciphertext);
+  return pkcs5Unpad(new Uint8Array(decrypted));
+}
+
+function pkcs5Pad(data) {
+  const padLen = 16 - (data.length % 16);
+  const padded = new Uint8Array(data.length + padLen);
+  padded.set(data);
+  for (let i = data.length; i < padded.length; i++) padded[i] = padLen;
+  return padded;
+}
+
+function pkcs5Unpad(data) {
+  const padLen = data[data.length - 1];
+  if (padLen < 1 || padLen > 16) return data;
+  return data.slice(0, data.length - padLen);
+}
+
+// === Custom Base64 (from r8/b.smali) ===
+const CUSTOM_ALPHABET = "jWB7YtC3n9iXbEkUcJl1VxF4STpQoOIaRmh2M-efAgLwPqGr6uyD5vNsdH_Kz0Z8";
+
+export function customBase64Encode(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  // Custom base64 encoding
+  const standard = btoa(binary);
+  // Map standard base64 to custom alphabet
+  const stdAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let result = "";
+  for (let i = 0; i < standard.length; i++) {
+    const ch = standard[i];
+    const idx = stdAlphabet.indexOf(ch);
+    if (idx === -1) {
+      result += ch;
+    } else {
+      result += CUSTOM_ALPHABET[idx];
+    }
+  }
+  return result;
+}
+
+export function customBase64Decode(str) {
+  const stdAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let standard = "";
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    const idx = CUSTOM_ALPHABET.indexOf(ch);
+    if (idx === -1) {
+      standard += ch;
+    } else {
+      standard += stdAlphabet[idx];
+    }
+  }
+  const binary = atob(standard);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}

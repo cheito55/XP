@@ -1,7 +1,7 @@
 /*
- * GrayJay - XuperTv Source v59
- * Tokens extraídos de capturas HAR - 16 sept 2026
- * Worker proxy para CORS + contenido pre-capturado
+ * GrayJay - XuperTv Source v80
+ * API REST descifrada - Login + Home + Live + VOD
+ * Worker proxy para API calls
  * ES5 puro - REPOSITORIO: https://github.com/cheito55/XP
  */
 
@@ -69,20 +69,22 @@ function parseList(data) {
   if (!data) return [];
   var arr = data;
   if (data.data && Array.isArray(data.data)) arr = data.data;
+  if (data.data && data.data.channels) arr = (data.data.channels || []).concat(data.data.vod || []);
   if (data.inner && Array.isArray(data.inner)) arr = data.inner;
   if (data.list && Array.isArray(data.list)) arr = data.list;
   if (!Array.isArray(arr)) arr = [];
 
   var videos = [], i;
-  for (i = 0; i < arr.length && videos.length < 30; i++) {
+  for (i = 0; i < arr.length && videos.length < 50; i++) {
     var item = arr[i];
     if (!item) continue;
-    var id = txt(item.contentId || item.content_id || item.id || item.mediaCode || item.channelId || "");
+    var id = txt(item.contentId || item.content_id || item.id || item.mediaCode || item.channelId || item.vodName || item.media_code || item.channel_code || "");
     if (!id) continue;
-    var title = txt(item.title || item.name || item.contentName || item.channelName || item.vodName || id);
-    var thumb = txt(item.logoUrl || item.picUrl || item.pic_url || item.posterUrl || item.cover || item.image || "");
+    var title = txt(item.title || item.name || item.contentName || item.channelName || item.vodName || item.vod_name || id);
+    var thumb = txt(item.logoUrl || item.picUrl || item.pic_url || item.posterUrl || item.cover || item.image || item.logo_url || "");
     var dur = parseInt(item.duration || item.timeLength || 0, 10) || 0;
-    var live = item.isLive || item.is_live || item.type === "live";
+    var live = item.isLive || item.is_live || item.type === "live" || item.channel_type === "live";
+    var type = txt(item.type || item.content_type || (live ? "live" : "vod"));
 
     var thumbs = [];
     if (thumb) thumbs.push(new Thumbnail(thumb, 480));
@@ -93,7 +95,7 @@ function parseList(data) {
       thumbnails: new Thumbnails(thumbs),
       author: new PlatformAuthorLink(new PlatformID(PLATFORM_NAME, "XuperTv"), "XuperTv", ""),
       datetime: new DateTime(0),
-      url: "xuper://content?id=" + encodeURIComponent(id),
+      url: "xuper://" + type + "?id=" + encodeURIComponent(id),
       duration: dur,
       viewCount: 0,
       isLive: live
@@ -111,15 +113,15 @@ source.getSearchSuggestions = function(q) { return ok(q) ? [q] : []; };
 source.getSearchCapabilities = function() { return { types: ["video"], sorts: [], filters: [] }; };
 
 source.search = function(query, type, order, filters) {
-  dbg("Búsqueda no disponible - usa Home para contenido capturado");
+  dbg("Busqueda no disponible - usa Home");
   return new VideoPager([], false, { query: txt(query) });
 };
 
 source.getHome = function() {
   dbg("Cargando home...");
-  var r = wPost("/api/home", {});
+  var r = wGet("/api/home");
   if (!r || !r.ok) {
-    dbg("Worker offline o sin respuesta");
+    dbg("Worker offline");
     return new VideoPager([], false, { type: "home", page: 1 });
   }
   var vids = parseList(r);
@@ -129,63 +131,72 @@ source.getHome = function() {
 
 source.getVideoDetails = function(url) {
   var id = "";
-  var m = txt(url).match(/id=([^&]+)/);
-  if (m) id = decodeURIComponent(m[1]);
-  if (!id) id = txt(url).replace(/^xuper:\/\//i, "").replace(/^content\?id=/i, "");
+  var typ = "vod";
+  var m = txt(url).match(/xuper:\/\/(\w+)\?id=([^&]+)/);
+  if (m) { typ = m[1]; id = decodeURIComponent(m[2]); }
+  if (!id) {
+    var m2 = txt(url).match(/id=([^&]+)/);
+    if (m2) id = decodeURIComponent(m2[1]);
+  }
+  if (!id) id = txt(url).replace(/^xuper:\/\//i, "").replace(/^(live|vod)\?id=/i, "");
   if (!id) throw new Error("No se pudo identificar el contentId");
 
-  dbg("Detalles: " + id);
-  var r = wPost("/api/details", { contentId: id });
-  if (!r || !r.ok) throw new Error("No se pudieron obtener detalles");
+  dbg("Detalles: " + id + " type=" + typ);
 
-  var item = r.data || {};
-  var title = txt(item.title || item.name || id);
-  var thumb = txt(item.logoUrl || item.picUrl || item.posterUrl || item.cover || "");
   var thumbs = [];
-  if (thumb) thumbs.push(new Thumbnail(thumb, 480));
-  var live = item.isLive || item.type === "live";
-
   var video = new PlatformVideo({
     id: new PlatformID(PLATFORM_NAME, id),
-    name: title,
+    name: id,
     thumbnails: new Thumbnails(thumbs),
     author: new PlatformAuthorLink(new PlatformID(PLATFORM_NAME, "XuperTv"), "XuperTv", ""),
     datetime: new DateTime(0),
     url: txt(url),
-    duration: parseInt(item.duration || 0, 10) || 0,
+    duration: 0,
     viewCount: 0,
-    isLive: live
+    isLive: typ === "live"
   });
 
   var sources = [];
-  // Pedir stream info al worker
-  var sr = wPost("/api/stream", { mediaCode: item.mediaCode || id });
-  if (sr && sr.ok && sr.streamUrl) {
-    sources.push(new VideoUrlSource({
-      url: sr.streamUrl,
-      width: 1920,
-      height: 1080,
-      container: live ? "application/x-mpegURL" : "video/mp4",
-      codec: "H.264",
-      requestModifier: new RequestModifier({
-        headerOverride: sr.headers || {}
-      })
-    }));
-  } else if (sr && sr.ok && sr.slbResponse) {
-    dbg("SLB response received, parseando...");
-    // La respuesta SLB es binaria/JSON con info de CDN
-    sources.push(new VideoUrlSource({
-      url: "xuper://pending?id=" + encodeURIComponent(id),
-      width: 1920,
-      height: 1080,
-      container: "video/mp4",
-      codec: "H.264"
-    }));
+
+  if (typ === "live") {
+    var lr = wPost("/api/live", { channelCode: id });
+    if (lr && lr.ok && lr.data) {
+      var streamUrl = lr.data.streamUrl || "";
+      if (streamUrl) {
+        sources.push(new VideoUrlSource({
+          url: streamUrl,
+          width: 1920,
+          height: 1080,
+          container: "application/x-mpegURL",
+          codec: "H.264",
+          requestModifier: new RequestModifier({
+            headerOverride: lr.data.headers || { "User-Agent": "Ranger/4.9.4-17294ac0" }
+          })
+        }));
+      }
+    }
+  } else {
+    var sr = wPost("/api/stream", { mediaCode: id });
+    if (sr && sr.ok && sr.data) {
+      var sUrl = sr.data.streamUrl || sr.data.url || "";
+      if (sUrl) {
+        sources.push(new VideoUrlSource({
+          url: sUrl,
+          width: 1920,
+          height: 1080,
+          container: "video/mp4",
+          codec: "H.264",
+          requestModifier: new RequestModifier({
+            headerOverride: sr.data.headers || { "User-Agent": "Ranger/4.9.4-17294ac0" }
+          })
+        }));
+      }
+    }
   }
 
   return new PlatformVideoDetails({
     video: video,
-    description: txt(item.description || title) + "\n\n[Nota: Tokens temporales de captura HAR]",
+    description: txt(id) + "\n\n[XuperTv v80 - API descifrada]",
     videoSources: new VideoSourceDescriptor(sources),
     subtitles: []
   });
@@ -193,26 +204,47 @@ source.getVideoDetails = function(url) {
 
 source.getVideoUrl = function(video) {
   var id = "";
-  if (video && video.id) id = txt(video.id.content || video.id.value || video.id);
-  if (!id && video && video.url) {
-    var m = txt(video.url).match(/id=([^&]+)/);
-    if (m) id = decodeURIComponent(m[1]);
+  var typ = "vod";
+  if (video && video.url) {
+    var m = txt(video.url).match(/xuper:\/\/(\w+)\?id=([^&]+)/);
+    if (m) { typ = m[1]; id = decodeURIComponent(m[2]); }
   }
+  if (!id && video && video.id) id = txt(video.id.content || video.id.value || video.id);
   if (!id) return [];
-  dbg("URL: " + id);
-  var sr = wPost("/api/stream", { mediaCode: id });
-  if (!sr || !sr.ok) return [];
-  if (sr.streamUrl) {
-    return [new VideoUrlSource({
-      url: sr.streamUrl,
-      width: 1920,
-      height: 1080,
-      container: "video/mp4",
-      codec: "H.264",
-      requestModifier: new RequestModifier({
-        headerOverride: sr.headers || {}
-      })
-    })];
+  
+  dbg("URL: " + id + " type=" + typ);
+
+  if (typ === "live") {
+    var lr = wPost("/api/live", { channelCode: id });
+    if (lr && lr.ok && lr.data && lr.data.streamUrl) {
+      return [new VideoUrlSource({
+        url: lr.data.streamUrl,
+        width: 1920,
+        height: 1080,
+        container: "application/x-mpegURL",
+        codec: "H.264",
+        requestModifier: new RequestModifier({
+          headerOverride: lr.data.headers || { "User-Agent": "Ranger/4.9.4-17294ac0" }
+        })
+      })];
+    }
+  } else {
+    var sr = wPost("/api/stream", { mediaCode: id });
+    if (sr && sr.ok && sr.data) {
+      var sUrl = sr.data.streamUrl || sr.data.url || "";
+      if (sUrl) {
+        return [new VideoUrlSource({
+          url: sUrl,
+          width: 1920,
+          height: 1080,
+          container: "video/mp4",
+          codec: "H.264",
+          requestModifier: new RequestModifier({
+            headerOverride: sr.data.headers || { "User-Agent": "Ranger/4.9.4-17294ac0" }
+          })
+        })];
+      }
+    }
   }
   return [];
 };
@@ -233,9 +265,9 @@ source.getDiagnostics = function() {
   } catch (e) {}
   return {
     platform: PLATFORM_NAME,
-    version: 59,
+    version: 80,
     worker: { url: workerUrl(), online: wOk, data: wData },
-    note: "Tokens HAR temporales. Actualizar con /api/tokens del Worker."
+    note: "Worker v8.0 - Login + Home + Live + VOD via API REST"
   };
 };
 
@@ -243,7 +275,7 @@ source.enable = function(conf, settings, savedState) {
   _conf = conf || {};
   _set = settings || {};
   _ready = true;
-  dbg("Plugin v59 habilitado");
+  dbg("Plugin v80 habilitado");
 };
 source.setSettings = function(s) { _set = s || {}; };
 source.getSettings = function() {
