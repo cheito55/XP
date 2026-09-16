@@ -48,3 +48,6 @@ wrangler deploy
 - Busqueda via TMDB (peliculas y series en espanol)
 - Worker cifra requests AES-CBC con Base64 custom
 - API dominios rotativos automaticos
+
+## Análisis de la app original
+Ver [`ANÁLISIS-APP-ORIGINAL.md`](ANÁLISIS-APP-ORIGINAL.md) — RE completa de `xuper_app.apk` (Xuper 6.5.7): protocolo de frames WS binarios (`0x50/0x65/0x30/0x31`), claves AES HTTP, flujo SLB de tokens y mediaCodes conocidos (`xuper-worker/media-codes.json`).
