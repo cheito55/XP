@@ -1,35 +1,22 @@
-# XuperTv - GrayJay Source (v57)
+# XuperTv - GrayJay Source Plugin v59
 
-Plugin GrayJay + Cloudflare Worker para XuperTv (peliculas y series).
-
-## Arquitectura
-
-```
-GrayJay (HTTP) → Cloudflare Worker (cloudflare:sockets) → Portal XuperTv (WebSocket)
-```
-
-El Worker actúa como puente: GrayJay solo puede hacer HTTP, pero el portal usa WebSocket.
-El Worker abre una conexión real WS al portal, envía los comandos, y devuelve la respuesta como JSON.
+Plugin para GrayJay que reproduce contenido de XuperTv usando un Cloudflare Worker como proxy.
 
 ## Archivos
 
-```
-XP/
-├── README.md
-├── XuperTv_GrayJay.js          # Plugin GrayJay v57 (ES5)
-├── XuperTv_GrayJay.json         # Manifest
-└── xuper-worker/
-    ├── worker.js                 # Cloudflare Worker v5.0
-    ├── wrangler.toml
-    └── README.md
-```
+- `XuperTv_GrayJay.json` - Manifest del plugin (cargar en GrayJay)
+- `XuperTv_GrayJay.js` - Plugin GrayJay (ES5 puro)
+- `xuper-worker/worker.js` - Cloudflare Worker v6 (proxy + tokens capturados)
+- `xuper-worker/wrangler.toml` - Config de Wrangler
 
 ## Instalación GrayJay
 
-1. Abre GrayJay > Configuración > Fuentes > Agregar fuente
-2. Pega: `https://raw.githubusercontent.com/cheito55/XP/main/XuperTv_GrayJay.json`
+1. Abre GrayJay → Settings → Sources → Add Source
+2. Pega la URL raw del JSON:
+   `https://raw.githubusercontent.com/cheito55/XP/main/XuperTv_GrayJay.json`
+3. El plugin se carga automáticamente
 
-## Despliegue Worker
+## Instalación Worker
 
 ```bash
 cd xuper-worker
@@ -38,36 +25,29 @@ wrangler login
 wrangler deploy
 ```
 
-## Configuración del Plugin
+## Tokens
 
-En ajustes del plugin:
+Los tokens de streaming expiran después de ~4 horas. Para actualizar:
 
-**Requerido:**
-- **User ID**: tu ID de usuario de XuperTv
-- **User Token**: tu token de autenticación
+1. Captura tráfico con HydraProxy + PCAPdroid mientras la app reproduce contenido
+2. Exporta como HAR
+3. Envía los tokens al Worker:
+   ```bash
+   curl -X POST https://TU-WORKER.workers.dev/api/tokens \
+     -H "Content-Type: application/json" \
+     -d '{"slbAuth": "TOKEN_SLB", "rangerId": "TU_RANGER_ID"}'
+   ```
 
-**Opcional:**
-- **Worker URL**: URL del Worker (por defecto `xuper-bridge.cheito55.workers.dev`)
-- **Portal Code**: código de portal
-- **Device ID**: ID del dispositivo (se auto-genera si no se pone)
+## Estado actual
 
-**Para obtener los tokens:**
-Los tokens se obtienen de la app original o mod. Puedes capturarlos con PCAPdroid o un proxy de red.
-
-## Identificadores del App
-
-| Campo | Valor |
-|-------|-------|
-| Paquete (mod) | `com.android.msandroid` |
-| Paquete (original) | `com.android.mgstxNF` |
-| App Version | `49902` |
-| User-Agent | `Ranger/4.9.4-17294ac0` |
-| Portal WS | `s23sdf56.45lc9mx79ab.com` |
-| Search WS | `sgyc.bfj1k2g4v.com` |
-| SLB | `yuwc.swzablvpm.com` |
+- ✅ Home (contenido pre-capturado)
+- ✅ Details (info de contenido)
+- ✅ Streaming (con tokens válidos)
+- ✅ CDN proxy (bypass CORS)
+- ✅ Subtítulos proxy
+- ❌ Búsqueda (requiere WS encriptado)
+- ❌ Descubrimiento automático (requiere WS encriptado)
 
 ## Limitaciones
 
-- Los portales HTTP viejos (v7/v8) están deprecados del lado del servidor
-- El plugin necesita userId + userToken (no hay login automático aún)
-- El WS al portal puede ser bloqueado por Cloudflare desde el Worker — en ese caso se intenta fallback HTTP
+El protocolo WebSocket del portal XuperTv está encriptado con un algoritmo propietario. Sin descifrarlo, no se puede obtener contenido nuevo automáticamente. Los tokens de streaming son temporales (~4h) y deben actualizarse con nuevas capturas.
