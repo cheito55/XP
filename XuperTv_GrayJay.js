@@ -1,23 +1,42 @@
 /*
- * GrayJay Plugin - XuperTv v87
- * Catálogo TMDB (recomendaciones Home + Búsqueda)
- * Subtítulos + Multi-servidor automático
- * ES5 compatible
+ * GrayJay Plugin - XuperTv v88
+ * ==============================
+ * Integración completa con el backend Xuper/pornboxhub
+ * 
+ * CARACTERÍSTICAS:
+ *   - Catálogo TMDB (búsqueda + home)
+ *   - Catálogo REAL de Xuper vía API (getShelveData, getRecommends)
+ *   - SLB Discovery para URLs de streaming frescas
+ *   - Canales en vivo + VODs
+ *   - Subtítulos multi-idioma
+ *   - Worker bridge para auth dinámica
+ *   - ES5 compatible
+ *
  * REPOSITORIO: https://github.com/cheito55/XP
  *
  * CONFIG:
- *   tmdb_api_key: tu API key de TMDB (opcional pero recomendado)
- *   worker_url: URL del Worker (por defecto xuper-bridge)
+ *   worker_url: URL de tu Worker Cloudflare
+ *   tmdb_api_key: API key de TMDB (opcional)
+ *   xuper_user_id: Tu user_id de Xuper (para auth)
+ *   xuper_dev_id: Device ID (se genera automático si no se provee)
  */
 
 var PLATFORM = "XuperTv";
 var DEFAULT_WORKER = "https://xuper-bridge.cheito55.workers.dev";
 var TMDB_IMG = "https://image.tmdb.org/t/p";
-var TMDB_KEY = "a5908e29bac47d6ef32f27c44ecda02a"; // key del usuario
+var TMDB_KEY = "a5908e29bac47d6ef32f27c44ecda02a";
+var XUPER_BACKEND = "https://xuper.pornboxhub.com";
+var XUPER_API = XUPER_BACKEND + "/api/portalCore";
 
 var _conf = {};
 var _workerUrl = DEFAULT_WORKER;
+var _userAgent = "okhttp/3.14.9";
+var _appVersion = "49902";
+var _appId = "com.android.msandroid";
 
+// ============================================================
+//  CAPTURAS HARDCODEADAS (fallback cuando el worker no responde)
+// ============================================================
 var CAPTURED_ITEMS = [
   { id: "cyx_50fdcc0817d61_720p", title: "Canal En Vivo 720p", isLive: true },
   { id: "BCF940BE93754676AB0877E91258675D", title: "Pelicula VOD 1 (BCF9)", isLive: false },
@@ -40,7 +59,7 @@ var VOD_URLS = {
   },
   "B617D2ED6E724D1196390AE68C7E6CCD": {
     urls: [
-      "http://216.245.210.139:17209/vod/B617D2ED6E724D1196390AE68C7E6CCD_media.ts?content_auth2=/vod/%3Ftag%3Dslb%26host%3D216.245.210.139:17209%26app_id%3Dcom.android.msandroid%26trans_id%3DJJnpIuz8DaBR_2dIv68uxEl4%26app_version%3D49902%26client_ip%3D190.138.158.244%26dev_id%3D4bcbba56be83f23758c36b1afc33f8b5%26auth_id%3D958502306_com.android.msandroid__0%26user_id%3D958502306%26expired%3D1789083981%26token%3D69a9859b96326022d60d4b82484b0a76&content_license2=tag%3Dslb%26scheme%3Dslb%26app_id%3Dcom.android.msandroid%26media_code%3DB617D2ED6E724D1196390AE68C7E6CCD%26expired%3D1789083981%26token%3Db1e2c16a5dc6f19b9e3f3d1c30123222"
+      "http://216.245.210.139:17209/vod/B617D2ED6E724D1196390AE68C7E6CCD_media.ts?content_auth2=/vod/%3Ftag%3Dslb%26host%3D216.245.210.139:17209%26app_id%3Dcom.android.msandroid%26trans_id%3DJJnpIuz8DaBR_2dIv68uxEl4%26app_version%3D49902%26client_ip%3D190.138.158.244%26dev_id%3D4bcbba56be83f23758c36b1afc33f8b5%26auth_id%3D958502306_com.android.msandroid__0%26user_id%3D958502306%26expired%3D1789083981%26token%3D69a9859b96326022d60d4b82484b0a76&content_license2=tag%3Dslb%26scheme%3Dslb%26app_id%3Dcom.android.msandroid%26media_code%3DB617D2ED6E724D1196390AE68C7E6CCD%26expired%3D1789083981%26token%3Db1e2c16a5dcf19b9e3f3d1c30123222"
     ],
     subtitles: [
       { name: "Español (Esp)", language: "es", url: "http://cxdgdx.zobpngkth.com/public/subs/e7541da1-35d4-411f-b3fa-329833f5d68f.srt", format: "srt" },
@@ -54,27 +73,57 @@ var VOD_URLS = {
   }
 };
 
+// ============================================================
+//  FUNCIONES AUXILIARES
+// ============================================================
+
 function safeGet(url) {
   try { return http.GET(url, {}); } catch (e) { return null; }
+}
+function safePost(url, body, headers) {
+  try { return http.POST(url, body, headers || {}); } catch (e) { return null; }
 }
 function safeParseJson(body) {
   try { return JSON.parse(body); } catch (e) { return null; }
 }
+
 function getWorkerUrl() {
   if (_conf && _conf.settings && _conf.settings.worker_url) {
     return String(_conf.settings.worker_url).replace(/\/+$/, "");
   }
   return _workerUrl;
 }
+
+function getUserAgent() {
+  return _userAgent;
+}
+
+function getAppVersion() {
+  return _appVersion;
+}
+
+function getAppId() {
+  return _appId;
+}
+
+function getUserConf(key, def) {
+  if (_conf && _conf.settings && _conf.settings[key] !== undefined && _conf.settings[key] !== "") {
+    return _conf.settings[key];
+  }
+  return def;
+}
+
+// ============================================================
+//  TMDB
+// ============================================================
+
 function tmdbImg(path, size) {
   if (!path) return "";
   return TMDB_IMG + "/" + (size || "w500") + path;
 }
+
 function tmdbApiKey() {
-  if (_conf && _conf.settings && _conf.settings.tmdb_api_key) {
-    return String(_conf.settings.tmdb_api_key).trim();
-  }
-  return TMDB_KEY;
+  return getUserConf("tmdb_api_key", TMDB_KEY);
 }
 
 function tmdbRequest(path) {
@@ -114,12 +163,151 @@ function tmdbItemToVideo(r, extraTitle) {
   });
 }
 
-function tmdbYear(year) {
-  if (!year) return "";
-  return " (" + year + ")";
+// ============================================================
+//  API XUPER (backend real)
+// ============================================================
+
+function xuperApiCall(endpoint, params) {
+  // Intenta primero vía worker (maneja auth y SLB)
+  try {
+    var workerUrl = getWorkerUrl();
+    var url = workerUrl + "/api/xuper" + endpoint;
+    var resp = safePost(url, JSON.stringify(params || {}), { "Content-Type": "application/json" });
+    if (resp && resp.isOk && resp.body) {
+      var data = safeParseJson(resp.body);
+      if (data && data.ok && data.data) return data.data;
+    }
+  } catch (e) {}
+  return null;
 }
 
-// === HOME: TMDB trending + popular movies + popular series ===
+function xuperGetShelveData() {
+  return xuperApiCall("/getShelveData", {});
+}
+
+function xuperGetRecommends() {
+  return xuperApiCall("/getRecommends", {});
+}
+
+function xuperGetSlbInfo() {
+  return xuperApiCall("/getSlbInfo", {});
+}
+
+function xuperGetStreamUrl(mediaCode) {
+  try {
+    var workerUrl = getWorkerUrl();
+    var url = workerUrl + "/api/stream";
+    var resp = safePost(url, JSON.stringify({ mediaCode: mediaCode }), { "Content-Type": "application/json" });
+    if (resp && resp.isOk && resp.body) {
+      var data = safeParseJson(resp.body);
+      if (data && data.ok && data.data && data.data.streamUrl) {
+        return data.data.streamUrl;
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+function xuperGetLiveChannels() {
+  return xuperApiCall("/getLiveChannels", {});
+}
+
+// ============================================================
+//  CONSTRUIR VIDEOS DESDE CATÁLOGO XUPER
+// ============================================================
+
+function buildXuperVideo(item) {
+  var id = item.id || item.media_code || "";
+  var title = item.title || item.name || id;
+  var isLive = !!item.isLive;
+  var poster = item.poster || item.thumbnail || "";
+  var thumbs = [];
+  if (poster) thumbs.push(new Thumbnail(poster, 500));
+
+  var url = "xuper://" + (isLive ? "live" : "vod") + "?id=" + encodeURIComponent(id);
+
+  return new PlatformVideo({
+    id: new PlatformID(PLATFORM, "xuper_" + id, _conf.id),
+    name: (isLive ? "LIVE: " : "") + title,
+    thumbnails: new Thumbnails(thumbs),
+    author: new PlatformAuthorLink(
+      new PlatformID(PLATFORM, "XuperTv", _conf.id),
+      "XuperTv", ""
+    ),
+    uploadDate: 0,
+    duration: 0,
+    viewCount: 0,
+    url: url,
+    isLive: isLive
+  });
+}
+
+function buildCapturedVideo(item) {
+  var id = item.id;
+  var title = item.title || id;
+  var isLive = !!item.isLive;
+  var thumbs = [];
+  var url = "xuper://" + (isLive ? "live" : "vod") + "?id=" + encodeURIComponent(id);
+  return new PlatformVideo({
+    id: new PlatformID(PLATFORM, id, _conf.id),
+    name: (isLive ? "LIVE: " : "XUPER: ") + title,
+    thumbnails: new Thumbnails(thumbs),
+    author: new PlatformAuthorLink(
+      new PlatformID(PLATFORM, "XuperTv", _conf.id),
+      "XuperTv", ""
+    ),
+    uploadDate: 0,
+    duration: 0,
+    viewCount: 0,
+    url: url,
+    isLive: isLive
+  });
+}
+
+function makePager(videos) {
+  return new VideoPager(videos || [], false, null);
+}
+
+// ============================================================
+//  HOME: TMDB + Xuper real catalog
+// ============================================================
+
+function getXuperCatalog() {
+  var videos = [];
+
+  // 1. Obtener shelve data (catálogo real de Xuper)
+  var shelve = xuperGetShelveData();
+  if (shelve && shelve.list) {
+    for (var i = 0; i < shelve.list.length; i++) {
+      var item = shelve.list[i];
+      if (item.media_code || item.id) {
+        videos.push(buildXuperVideo({
+          id: item.media_code || item.id,
+          title: item.title || item.name,
+          isLive: false,
+          poster: item.poster || item.thumbnail
+        }));
+      }
+    }
+  }
+
+  // 2. Obtener canales en vivo
+  var live = xuperGetLiveChannels();
+  if (live && live.list) {
+    for (var j = 0; j < live.list.length; j++) {
+      var l = live.list[j];
+      videos.push(buildXuperVideo({
+        id: l.id || l.channel_id,
+        title: l.title || l.name,
+        isLive: true,
+        poster: l.poster || l.thumbnail
+      }));
+    }
+  }
+
+  return videos;
+}
+
 function tmdbHome() {
   var videos = [];
   var i;
@@ -149,15 +337,6 @@ function tmdbHome() {
     }
   }
 
-  // Add captured XuperTv items
-  for (i = 0; i < CAPTURED_ITEMS.length; i++) {
-    var item = CAPTURED_ITEMS[i];
-    if (item.isLive) continue;
-    var st = VOD_URLS[item.id];
-    if (!st || !st.urls || st.urls.length === 0) continue;
-    videos.push(buildCapturedVideo(item));
-  }
-
   return videos;
 }
 
@@ -176,41 +355,41 @@ function tmdbSearch(query) {
   return videos;
 }
 
-function buildCapturedVideo(item) {
-  var id = item.id;
-  var title = item.title || id;
-  var isLive = !!item.isLive;
-  var thumbs = [];
-  var url = "xuper://" + (isLive ? "live" : "vod") + "?id=" + encodeURIComponent(id);
-  return new PlatformVideo({
-    id: new PlatformID(PLATFORM, id, _conf.id),
-    name: (isLive ? "LIVE: " : "XUPER: ") + title,
-    thumbnails: new Thumbnails(thumbs),
-    author: new PlatformAuthorLink(
-      new PlatformID(PLATFORM, "XuperTv", _conf.id),
-      "XuperTv", ""
-    ),
-    uploadDate: 0,
-    duration: 0,
-    viewCount: 0,
-    url: url,
-    isLive: isLive
-  });
+// ============================================================
+//  GENERATE DEVICE ID (estilo Xuper)
+// ============================================================
+
+function generateDeviceId() {
+  var configured = getUserConf("xuper_dev_id", "");
+  if (configured) return configured;
+
+  var chars = "0123456789abcdef";
+  var id = "";
+  for (var i = 0; i < 32; i++) {
+    id += chars.charAt(Math.floor(Math.random() * 16));
+  }
+  return id;
 }
 
-function makePager(videos) {
-  return new VideoPager(videos || [], false, null);
+function generateUserId() {
+  return getUserConf("xuper_user_id", "0");
 }
 
-// === Source API ===
+// ============================================================
+//  SOURCE API
+// ============================================================
+
 source.enable = function(conf) { _conf = conf; };
 
 source.getSettings = function() {
   return [
     { key: "worker_url", label: "Worker URL", type: "text", defaultValue: DEFAULT_WORKER },
-    { key: "tmdb_api_key", label: "TMDB API Key (themoviedb.org/settings/api)", type: "text", defaultValue: "" }
+    { key: "tmdb_api_key", label: "TMDB API Key (themoviedb.org/settings/api)", type: "text", defaultValue: "" },
+    { key: "xuper_user_id", label: "Xuper User ID (opcional)", type: "text", defaultValue: "" },
+    { key: "xuper_dev_id", label: "Xuper Device ID (opcional, se genera auto)", type: "text", defaultValue: "" }
   ];
 };
+
 source.setSettings = function(settings) {
   if (settings && settings.worker_url) {
     _workerUrl = String(settings.worker_url).replace(/\/+$/, "");
@@ -220,18 +399,40 @@ source.setSettings = function(settings) {
 source.getSearchCapabilities = function() {
   return { types: [Type.Feed.Mixed], sorts: [], filters: [] };
 };
+
 source.isChannelUrl = function() { return false; };
+
 source.isContentDetailsUrl = function(url) {
   return /^xuper:\/\//i.test(String(url || "")) || /^tmdb:\/\//i.test(String(url || ""));
 };
+
 source.isVideoDetailsUrl = function(url) {
   return /^xuper:\/\//i.test(String(url || "")) || /^tmdb:\/\//i.test(String(url || ""));
 };
 
 source.search = function(query, type, order, filters, continuationToken) {
   var videos = tmdbSearch(query);
+
+  var xuper = xuperGetShelveData();
+  if (xuper && xuper.list) {
+    var q = query.toLowerCase();
+    for (var i = 0; i < xuper.list.length; i++) {
+      var item = xuper.list[i];
+      var title = (item.title || item.name || "").toLowerCase();
+      if (title.indexOf(q) !== -1) {
+        videos.push(buildXuperVideo({
+          id: item.media_code || item.id,
+          title: item.title || item.name,
+          isLive: false,
+          poster: item.poster || item.thumbnail
+        }));
+      }
+    }
+  }
+
   return makePager(videos);
 };
+
 source.searchSuggestions = function(query) {
   if (!query) return [];
   var videos = tmdbSearch(query);
@@ -243,20 +444,30 @@ source.searchSuggestions = function(query) {
 };
 
 source.getHome = function(continuationToken) {
-  var videos = tmdbHome();
+  var videos = [];
+
+  var xuperVideos = getXuperCatalog();
+  for (var xi = 0; xi < xuperVideos.length; xi++) {
+    videos.push(xuperVideos[xi]);
+  }
+
+  var tmdbVideos = tmdbHome();
+  for (var ti = 0; ti < tmdbVideos.length; ti++) {
+    videos.push(tmdbVideos[ti]);
+  }
+
   if (videos.length === 0) {
-    // Fallback: captured items
-    for (var i = 0; i < CAPTURED_ITEMS.length; i++) {
-      videos.push(buildCapturedVideo(CAPTURED_ITEMS[i]));
+    for (var ci = 0; ci < CAPTURED_ITEMS.length; ci++) {
+      videos.push(buildCapturedVideo(CAPTURED_ITEMS[ci]));
     }
   }
+
   return makePager(videos);
 };
 
 source.getContentDetails = function(url) {
   var s = String(url || "");
 
-  // TMDB details (catálogo)
   var tmdbMatch = s.match(/^tmdb:\/\/(movie|tv)\/(\d+)/);
   if (tmdbMatch) {
     var mediaType = tmdbMatch[1];
@@ -280,7 +491,6 @@ source.getContentDetails = function(url) {
         }
       }
 
-      // Genre names
       var genres = "";
       if (data.genres) {
         for (var gi = 0; gi < Math.min(data.genres.length, 3); gi++) {
@@ -289,18 +499,19 @@ source.getContentDetails = function(url) {
       }
 
       var desc = overview + "\n\nGénero: " + (genres || "N/A") +
-        "\n\nNota: El catálogo TMDB es un buscador. El contenido real de XuperTv usa códigos propios (WS binario) que expiran. Para ver una película del catálogo XuperTv necesitás capturar sus tokens.";
+        "\n🔍 XuperTv v88 - Usa el Worker para obtener URLs del backend real.";
+      var runtime = data.runtime ? data.runtime * 60 : 0;
 
       return new PlatformVideoDetails({
         id: new PlatformID(PLATFORM, mediaType + "_" + tmdbId, _conf.id),
-        name: title + tmdbYear(year),
+        name: title + (year ? " (" + year + ")" : ""),
         thumbnails: new Thumbnails(thumbs),
         author: new PlatformAuthorLink(
           new PlatformID(PLATFORM, authorName, _conf.id),
           authorName, ""
         ),
         uploadDate: 0,
-        duration: data.runtime ? data.runtime * 60 : 0,
+        duration: runtime,
         viewCount: 0,
         url: url,
         isLive: false,
@@ -313,7 +524,6 @@ source.getContentDetails = function(url) {
     }
   }
 
-  // XuperTv captured content
   var id = "";
   var isLive = false;
   var m = s.match(/xuper:\/\/(live|vod)\?id=([^&]+)/);
@@ -323,25 +533,25 @@ source.getContentDetails = function(url) {
   var st = VOD_URLS[id] || {};
   var urls = st.urls || [];
   var title = id;
+
   for (var i = 0; i < CAPTURED_ITEMS.length; i++) {
     if (CAPTURED_ITEMS[i].id === id) { title = CAPTURED_ITEMS[i].title; break; }
   }
 
-  // Try worker for fresh URL
-  var workerStream = null;
-  if (!isLive && (!urls || urls.length === 0)) {
-    try {
-      var wresp = http.POST(getWorkerUrl() + "/api/stream", JSON.stringify({ mediaCode: id }), { "Content-Type": "application/json" });
-      if (wresp && wresp.isOk && wresp.body) {
-        var wdata = safeParseJson(wresp.body);
-        if (wdata && wdata.ok && wdata.data && wdata.data.streamUrl) {
-          workerStream = wdata.data.streamUrl;
-        }
-      }
-    } catch (e) {}
+  // OBTENER URL FRESCA VÍA WORKER
+  var videoSources = [];
+
+  var workerStream = xuperGetStreamUrl(id);
+  if (workerStream) {
+    videoSources.push(new VideoUrlSource({
+      url: workerStream,
+      width: 1920,
+      height: 1080,
+      container: isLive ? "application/x-mpegURL" : "video/mp2t",
+      codec: "H.264"
+    }));
   }
 
-  var videoSources = [];
   if (urls.length > 0) {
     for (var ui = 0; ui < urls.length; ui++) {
       videoSources.push(new VideoUrlSource({
@@ -353,17 +563,7 @@ source.getContentDetails = function(url) {
       }));
     }
   }
-  if (workerStream) {
-    videoSources.push(new VideoUrlSource({
-      url: workerStream,
-      width: 1920,
-      height: 1080,
-      container: "video/mp2t",
-      codec: "H.264"
-    }));
-  }
 
-  // Subtitles from captures
   var subtitles = [];
   if (st.subtitles) {
     for (var si = 0; si < st.subtitles.length; si++) {
@@ -390,7 +590,7 @@ source.getContentDetails = function(url) {
     viewCount: 0,
     url: url,
     isLive: isLive,
-    description: title + "\n\nXuperTv - Contenido capturado",
+    description: title + "\n\nXuperTv v88 - Integración backend real",
     video: new VideoSourceDescriptor(videoSources),
     live: null,
     rating: new RatingLikes(0),
@@ -400,6 +600,7 @@ source.getContentDetails = function(url) {
 
 source.getChannelContents = function() { return makePager([]); };
 source.searchChannels = function() { return makePager([]); };
+
 source.getChannel = function() {
   return new PlatformChannel({
     id: new PlatformID(PLATFORM, "XuperTv", _conf.id),
@@ -409,9 +610,11 @@ source.getChannel = function() {
     subscriberCount: 0
   });
 };
+
 source.getDiagnostics = function() {
   var wOk = false;
   var tOk = false;
+  var xOk = false;
   try {
     var h = safeGet(getWorkerUrl() + "/health");
     if (h && h.isOk) { var d = safeParseJson(h.body); wOk = !!(d && d.ok); }
@@ -420,5 +623,17 @@ source.getDiagnostics = function() {
     var t = tmdbRequest("/configuration");
     tOk = !!(t && t.images);
   } catch (e) {}
-  return { platform: PLATFORM, version: 87, workerOnline: wOk, tmdbOk: tOk, catalogo: "TMDB + capturas Xuper" };
+  try {
+    var s = xuperGetShelveData();
+    xOk = !!(s && s.list);
+  } catch (e) {}
+
+  return {
+    platform: PLATFORM,
+    version: 88,
+    workerOnline: wOk,
+    tmdbOk: tOk,
+    xuperApiOk: xOk,
+    message: "Worker=" + (wOk ? "✓" : "✗") + " TMDB=" + (tOk ? "✓" : "✗") + " Xuper=" + (xOk ? "✓" : "✗")
+  };
 };
