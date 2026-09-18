@@ -1,20 +1,20 @@
 {
   "path": "XuperTv_GrayJay.json"
 }
-    1→{
-    2→  "name": "XuperTv",
-    3→  "description": "XuperTv v88 - Catálogo TMDB + Backend Xuper real + Worker Cloudflare",
-    4→  "author": "cheito55",
-    5→  "authorUrl": "https://github.com/cheito55",
-    6→  "sourceUrl": "https://raw.githubusercontent.com/cheito55/XP/main/XuperTv_GrayJay.json",
-    7→  "repositoryUrl": "https://github.com/cheito55/XP",
-    8→  "scriptUrl": "./XuperTv_GrayJay.js",
-    9→  "version": 88,
-   10→  "iconUrl": "",
-   11→  "id": "8d1f6f41-7d4a-4e8c-a42f-5c9b7a31e602",
-   12→  "scriptSignature": "",
-   13→  "scriptPublicKey": "",
-   14→  "packages": ["Http"],
-   15→  "allowEval": false,
-   16→  "allowUrls": ["everywhere"]
-   17→}
+    {
+    "name": "XuperTv",
+    "description": "XuperTv v88 - Catálogo TMDB + Backend Xuper real + Worker Cloudflare",
+    "author": "cheito55",
+    "authorUrl": "https://github.com/cheito55",
+    "sourceUrl": "https://raw.githubusercontent.com/cheito55/XP/main/XuperTv_GrayJay.json",
+    "repositoryUrl": "https://github.com/cheito55/XP",
+    "scriptUrl": "./XuperTv_GrayJay.js",
+    "version": 88,
+    "iconUrl": "",
+   "id": "8d1f6f41-7d4a-4e8c-a42f-5c9b7a31e602",
+   "scriptSignature": "",
+   "scriptPublicKey": "",
+   "packages": ["Http"],
+   "allowEval": false,
+   "allowUrls": ["everywhere"]
+   }
