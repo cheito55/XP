@@ -1,0 +1,7 @@
+name = "xuper-bridge"
+main = "worker.js"
+compatibility_date = "2024-09-01"
+
+[vars]
+WORKER_VERSION = "9.2"
+TMDB_KEY = "a5908e29bac47d6ef32f27c44ecda02a"
