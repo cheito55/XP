@@ -1,4 +1,4 @@
-/* GrayJay XuperTv v93 - Conectado al Worker unificado de xuper-webapp */
+/* GrayJay XuperTv v94 - Conectado al Worker unificado de xuper-webapp */
 var PLATFORM = "XuperTv";
 var DEFAULT_WORKER = "https://xuper-webapp.cheito55.workers.dev";
 var DEFAULT_PORTAL = "masnew";
@@ -213,7 +213,6 @@ function pager(arr) {
 }
 
 function workerItems(path, obj) {
-  // Primero intenta sin credenciales locales: usa la sesion guardada en XUPER_KV
   var r = post(path, obj || {});
   var d = bodyJson(r);
 
@@ -280,19 +279,6 @@ source.enable = function (conf, settings, savedState) {
     _workerUrl = setting("worker_url");
   }
   _loginTried = false;
-};
-
-source.getSettings = function () {
-  return [
-    { key: "worker_url", label: "Worker URL", type: "text", defaultValue: DEFAULT_WORKER },
-    { key: "use_stream_proxy", label: "Proxy de video en Worker", type: "boolean", defaultValue: "false" },
-    { key: "user_id", label: "Xuper User ID", type: "text", defaultValue: "" },
-    { key: "user_token", label: "Xuper User Token", type: "text", defaultValue: "" },
-    { key: "portal_code", label: "Xuper Portal Code", type: "text", defaultValue: DEFAULT_PORTAL },
-    { key: "dev_id", label: "Xuper Device ID", type: "text", defaultValue: "" },
-    { key: "email", label: "Xuper Account Email", type: "text", defaultValue: "" },
-    { key: "password", label: "Xuper Account Password", type: "text", defaultValue: "" }
-  ];
 };
 
 source.setSettings = function (s) {
@@ -489,7 +475,7 @@ source.getDiagnostics = function () {
   var d = bodyJson(r);
   return {
     platform: PLATFORM,
-    version: 93,
+    version: 94,
     workerUrl: worker(),
     useStreamProxy: useStreamProxy(),
     workerOnline: !!(d && d.ok),
