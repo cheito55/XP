@@ -1,12 +1,12 @@
 {
   "name": "XuperTv",
-  "description": "XuperTv v93 - Conectado al Worker unificado de xuper-webapp (KV + VOD + Live)",
+  "description": "XuperTv v94 - Conectado al Worker unificado de xuper-webapp (KV + VOD + Live)",
   "author": "cheito55",
   "authorUrl": "https://github.com/cheito55",
   "sourceUrl": "https://raw.githubusercontent.com/cheito55/XP/main/XuperTv_GrayJay.json",
   "repositoryUrl": "https://github.com/cheito55/XP",
   "scriptUrl": "./XuperTv_GrayJay.js",
-  "version": 93,
+  "version": 94,
   "iconUrl": "",
   "id": "8d1f6f41-7d4a-4e8c-a42f-5c9b7a31e602",
   "scriptSignature": "",
@@ -20,60 +20,11 @@
   ],
   "settings": [
     {
-      "variable": "worker_url",
-      "name": "Worker URL",
-      "description": "URL de tu Cloudflare Worker unificado (el mismo de la webapp)",
-      "type": "Text",
-      "default": "https://xuper-webapp.cheito55.workers.dev"
-    },
-    {
       "variable": "use_stream_proxy",
       "name": "Proxy de video en Worker",
       "description": "Desactivado por defecto para no gastar cuota de la webapp. Activalo solo si tu red bloquea el CDN directo.",
       "type": "Boolean",
       "default": "false"
-    },
-    {
-      "variable": "user_id",
-      "name": "Xuper User ID (Opcional)",
-      "description": "Dejar vacio para usar automaticamente la sesion guardada en XUPER_KV",
-      "type": "Text",
-      "default": ""
-    },
-    {
-      "variable": "user_token",
-      "name": "Xuper User Token (Opcional)",
-      "description": "Dejar vacio para usar automaticamente el token guardado en XUPER_KV",
-      "type": "Text",
-      "default": ""
-    },
-    {
-      "variable": "portal_code",
-      "name": "Xuper Portal Code",
-      "description": "Codigo de portal (por defecto: masnew)",
-      "type": "Text",
-      "default": "masnew"
-    },
-    {
-      "variable": "dev_id",
-      "name": "Xuper Device ID (Opcional)",
-      "description": "ID de dispositivo asociado a tu sesion",
-      "type": "Text",
-      "default": ""
-    },
-    {
-      "variable": "email",
-      "name": "Email Xuper (Opcional)",
-      "description": "Solo necesario si no hay sesion activa en el Worker",
-      "type": "Text",
-      "default": ""
-    },
-    {
-      "variable": "password",
-      "name": "Password Xuper (Opcional)",
-      "description": "Solo necesario si no hay sesion activa en el Worker",
-      "type": "Text",
-      "default": ""
     }
   ]
 }
